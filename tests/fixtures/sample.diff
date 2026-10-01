@@ -1,0 +1,10 @@
+diff --git a/pkg/auth.py b/pkg/auth.py
+index 1111111..2222222 100644
+--- a/pkg/auth.py
++++ b/pkg/auth.py
+@@ -14,6 +14,8 @@ def accept(token, now):
+     if token is None:
+         return False
++    if token.expires_at < now:
++        return False
+     return hmac.compare_digest(token.signature, expected)
