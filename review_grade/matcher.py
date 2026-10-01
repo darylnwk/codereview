@@ -64,15 +64,21 @@ def line_in_span(line: int, defect: dict) -> bool:
 
 
 def describes(finding: dict, defect: dict) -> bool:
-    """True when the finding text shares the defect's distinctive words."""
-    said = content_tokens(f"{finding.get('what_breaks', '')} {finding.get('fix', '')}")
+    """True when what_breaks names this defect.
+
+    Title words count only in what_breaks. A fix can repeat the scene
+    (Bluesky, confirmation) without describing the break. Description words
+    count only together with a title word, so cache/confirm/account overlap
+    does not match a different defect in the same span.
+    """
+    what = content_tokens(str(finding.get("what_breaks") or ""))
     title = content_tokens(str(defect.get("title") or ""))
-    if len(title) >= 2 and len(title & said) >= 2:
+    if len(title) >= 2 and len(title & what) >= 2:
         return True
-    if len(title) == 1 and title <= said:
+    if len(title) == 1 and title <= what:
         return True
     description = content_tokens(str(defect.get("description") or ""))
-    return len(description & said) >= 4
+    return len(title & what) >= 1 and len(description & what) >= 4
 
 
 def _finding_list(payload: object) -> list[dict]:

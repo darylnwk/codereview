@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import unittest
 
-from review_grade.matcher import kill_gate, score_findings
+from review_grade.matcher import (
+    catches,
+    describes,
+    files_match,
+    kill_gate,
+    line_in_span,
+    score_findings,
+)
 from review_grade.rubric import load_prefix
 from review_grade.stress import format_summary, load_subset, run_stress
 from review_grade.subset import default_jsonl, load_rows, select_subset
@@ -67,6 +74,45 @@ class MatcherTests(unittest.TestCase):
 
         twice = score_findings([_finding(defect), _finding(defect)], [defect])
         self.assertEqual(twice.caught, 1)
+
+    def test_scene_words_do_not_catch_a_different_defect_in_the_same_span(self) -> None:
+        # Ghost pull 10 plants a missing query invalidation at this span.
+        # The cached pass-2 finding at line 2823 is a different break
+        # (a late confirm overwrites a disable) and only shares scene words.
+        defect = None
+        for item in load_subset():
+            for issue in item["issues"]:
+                path = issue["file_path"]
+                if (
+                    path.endswith("use-activity-pub-queries.ts")
+                    and issue["start_line"] == 2820
+                    and issue["end_line"] == 2834
+                ):
+                    defect = issue
+        self.assertIsNotNone(defect)
+        self.assertIn("invalidation", defect["title"])
+        finding = {
+            "file": "apps/activitypub/src/hooks/use-activity-pub-queries.ts",
+            "line": 2823,
+            "what_breaks": (
+                "confirm onSuccess writes enabled+confirmed into the shared "
+                "account cache with no generation check, so a late success "
+                "overwrites a completed disable."
+            ),
+            "fix": (
+                "Only apply the confirm cache update if Bluesky is still "
+                "enabled and this confirmation attempt has not been cancelled."
+            ),
+        }
+        self.assertTrue(files_match(finding["file"], defect["file_path"]))
+        self.assertTrue(line_in_span(finding["line"], defect))
+        self.assertFalse(describes(finding, defect))
+        self.assertFalse(catches(finding, defect))
+        missed = score_findings([finding], [defect])
+        self.assertEqual(missed.caught, 0)
+        self.assertEqual(missed.planted, 1)
+        named = score_findings([_finding(defect, line=2823)], [defect])
+        self.assertEqual(named.caught, 1)
 
     def test_kill_gate_bands(self) -> None:
         self.assertEqual(kill_gate(0.69, 2), "stop")
