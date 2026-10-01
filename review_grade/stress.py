@@ -11,9 +11,22 @@ import json
 from pathlib import Path
 
 from review_grade.matcher import Score, kill_gate, score_findings
-from review_grade.reviewer import ProviderError, review_diff
+from review_grade.reviewer import (
+    SONNET_MODEL,
+    CredentialError,
+    ProviderError,
+    review_diff,
+    review_diff_claude,
+)
 from review_grade.rubric import assemble_prompt, load_prefix
 from review_grade.subset import default_subset_path, load_rows, planted_count, select_subset
+
+# Completed Grok stress run. Do not launch another Grok run to recreate it.
+GROK_BASELINE_PLANTED = 60
+GROK_BASELINE_CAUGHT = 22
+GROK_BASELINE_RECALL = 0.36666666666666664
+GROK_BASELINE_VERDICT = "stop"
+GROK_BASELINE_MODEL = "grok-4.7-build-fast"
 
 
 def load_subset(path: Path | None = None) -> list[dict]:
@@ -72,7 +85,48 @@ def format_summary(subset: list[dict]) -> str:
     )
 
 
-def format_report(subset: list[dict], result: dict) -> str:
+def diagnose(caught: int, verdict: str) -> str:
+    """One label from the Sonnet caught count and verdict. Not a model call."""
+    if verdict in ("ship", "human decision"):
+        return "model issue"
+    if verdict != "stop":
+        raise ValueError(f"unexpected verdict {verdict}")
+    if caught >= GROK_BASELINE_CAUGHT + 6:
+        return "both"
+    return "rubric can be improved"
+
+
+def format_diagnosis(*, sonnet: dict | None = None, provider_error: str | None = None) -> str:
+    """Grok baseline plus either the Sonnet result and one label, or provider_error."""
+    lines = [
+        f"grok_planted={GROK_BASELINE_PLANTED}",
+        f"grok_caught={GROK_BASELINE_CAUGHT}",
+        f"grok_recall={GROK_BASELINE_RECALL!r}",
+        f"grok_verdict={GROK_BASELINE_VERDICT}",
+        f"grok_model={GROK_BASELINE_MODEL}",
+    ]
+    if provider_error is not None:
+        lines.append("provider_error")
+        return "\n".join(lines) + "\n"
+    if sonnet is None:
+        raise ValueError("sonnet result or provider error required")
+    if sonnet["recall"] != sonnet["caught"] / sonnet["planted"]:
+        raise ValueError("sonnet recall is not caught/planted")
+    label = diagnose(int(sonnet["caught"]), str(sonnet["verdict"]))
+    lines.extend(
+        [
+            f"sonnet_planted={sonnet['planted']}",
+            f"sonnet_caught={sonnet['caught']}",
+            f"sonnet_recall={sonnet['recall']!r}",
+            f"sonnet_verdict={sonnet['verdict']}",
+            f"sonnet_model={SONNET_MODEL}",
+            f"conclusion={label}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def format_report(subset: list[dict], result: dict, model: str | None = None) -> str:
     planted = result["planted"]
     caught = result["caught"]
     recall = result["recall"]
@@ -94,11 +148,14 @@ def format_report(subset: list[dict], result: dict) -> str:
         f"recall={recall!r}\n"
         f"verdict={result['verdict']}\n"
         f"passes={result['passes']}\n"
-        f"key_title_absent={'yes' if title not in prompt else 'no'}\n"
-        f"key_description_absent={'yes' if description not in prompt else 'no'}\n"
-        "prompt_excerpt<<\n"
-        f"{prefix}{diff_head}\n"
-        ">>\n"
+        + (f"model={model}\n" if model else "")
+        + (
+            f"key_title_absent={'yes' if title not in prompt else 'no'}\n"
+            f"key_description_absent={'yes' if description not in prompt else 'no'}\n"
+            "prompt_excerpt<<\n"
+            f"{prefix}{diff_head}\n"
+            ">>\n"
+        )
     )
 
 
@@ -112,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--subset", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=None)
+    parser.add_argument("--reviewer", choices=("grok", "sonnet"), default="grok")
+    parser.add_argument("--diagnosis", type=Path, default=None)
     args = parser.parse_args(argv)
 
     rows = load_rows()
@@ -149,7 +208,12 @@ def main(argv: list[str] | None = None) -> int:
             return {"findings": []}
         print(f"review {index + 1} {url}", flush=True)
         try:
-            payload = review_diff(prompt)
+            if args.reviewer == "sonnet":
+                payload = review_diff_claude(prompt)
+            else:
+                payload = review_diff(prompt)
+        except CredentialError:
+            raise
         except ProviderError as exc:
             state["err"] += 1
             state["last"] = str(exc)
@@ -160,15 +224,30 @@ def main(argv: list[str] | None = None) -> int:
         remember({"ok": True, "payload": payload})
         return payload
 
+    def write_provider_failure(message: str) -> None:
+        args.out.write_text(format_provider_error(message), encoding="utf-8")
+        if args.diagnosis is not None and args.reviewer == "sonnet":
+            args.diagnosis.write_text(
+                format_diagnosis(provider_error=message),
+                encoding="utf-8",
+            )
+
     args.summary.write_text(format_summary(subset), encoding="utf-8")
-    result = run_stress(subset, review)
-    if state["ok"] == 0:
-        args.out.write_text(format_provider_error(state["last"] or "reviewer failed"), encoding="utf-8")
+    try:
+        result = run_stress(subset, review)
+    except CredentialError as exc:
+        write_provider_failure(str(exc))
         return 2
-    text = format_report(subset, result)
+    if state["ok"] == 0:
+        write_provider_failure(state["last"] or "reviewer failed")
+        return 2
+    model = SONNET_MODEL if args.reviewer == "sonnet" else None
+    text = format_report(subset, result, model=model)
     if state["err"]:
         text += f"review_errors={state['err']}\n"
     args.out.write_text(text, encoding="utf-8")
+    if args.diagnosis is not None and args.reviewer == "sonnet":
+        args.diagnosis.write_text(format_diagnosis(sonnet=result), encoding="utf-8")
     return 0
 
 

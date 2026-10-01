@@ -11,8 +11,10 @@ import subprocess
 import tempfile
 
 # This account's `grok models` list has no grok-4-fast id. grok-4.7-build-fast
-# is the fast Grok model the login can run.
+# is the fast Grok model the login can run. A user diff still uses this model.
 REVIEWER_MODEL = "grok-4.7-build-fast"
+# Sonnet rerun of the stored stress test. Not the default for a user diff.
+SONNET_MODEL = "claude-sonnet-5-5"
 
 _FINDINGS_SCHEMA = json.dumps(
     {
@@ -44,6 +46,25 @@ class ProviderError(RuntimeError):
     pass
 
 
+class CredentialError(ProviderError):
+    """The reviewer CLI has no usable login. The stress run must not invent a recall."""
+
+
+def _credential_error(message: str) -> bool:
+    text = message.lower()
+    return any(
+        marker in text
+        for marker in (
+            "failed to authenticate",
+            "oauth",
+            "not logged in",
+            "no credential",
+            "api key",
+            "authentication",
+        )
+    )
+
+
 def parse_reviewer_stdout(stdout: str) -> object:
     """Pull findings out of the CLI's JSON envelope."""
     try:
@@ -62,6 +83,89 @@ def parse_reviewer_stdout(stdout: str) -> object:
         except json.JSONDecodeError as exc:
             raise ProviderError("reviewer text was not findings json") from exc
     raise ProviderError("reviewer returned no findings")
+
+
+def claude_command() -> list[str]:
+    """Non-interactive Claude CLI argv. Tools are disabled. The prompt is stdin."""
+    return [
+        "claude",
+        "-p",
+        "--model",
+        SONNET_MODEL,
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--permission-prompts",
+        "none",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--safe-mode",
+        "--system-prompt",
+        "Follow the user message exactly.",
+        "--json-schema",
+        _FINDINGS_SCHEMA,
+    ]
+
+
+def parse_claude_stdout(stdout: str) -> object:
+    """Pull findings out of `claude -p --output-format json`."""
+    try:
+        body = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise ProviderError("claude returned non-json") from exc
+    if not isinstance(body, dict):
+        raise ProviderError("claude returned a non-object")
+    if body.get("is_error"):
+        message = str(body.get("result") or body.get("terminal_reason") or "claude failed")
+        if _credential_error(message):
+            raise CredentialError(message)
+        raise ProviderError(message)
+    for key in ("structured_output", "structuredOutput"):
+        structured = body.get(key)
+        if isinstance(structured, dict):
+            return structured
+    text = body.get("result")
+    if isinstance(text, str) and text.strip():
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ProviderError("claude result was not findings json") from exc
+    raise ProviderError("claude returned no findings")
+
+
+def review_diff_claude(prompt: str, *, timeout_s: int = 300) -> object:
+    """Send prefix-plus-diff through the Claude CLI on Sonnet 5.5."""
+    if not isinstance(prompt, str) or prompt == "":
+        raise ProviderError("empty prompt")
+    try:
+        proc = subprocess.run(
+            claude_command(),
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise ProviderError("claude cli is not installed") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ProviderError(f"claude timed out after {timeout_s}s") from exc
+    stdout = proc.stdout or ""
+    if stdout.strip().startswith("{"):
+        payload = parse_claude_stdout(stdout)
+        if proc.returncode != 0:
+            detail = (proc.stderr or stdout or "claude failed").strip()
+            if _credential_error(detail):
+                raise CredentialError(detail)
+            raise ProviderError(detail)
+        return payload
+    detail = (proc.stderr or stdout or "claude failed").strip()
+    if _credential_error(detail):
+        raise CredentialError(detail)
+    if proc.returncode != 0:
+        raise ProviderError(detail or "claude failed")
+    return parse_claude_stdout(stdout)
 
 
 def review_diff(prompt: str, *, model: str = REVIEWER_MODEL, timeout_s: int = 300) -> object:
