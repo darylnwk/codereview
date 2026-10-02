@@ -12,6 +12,7 @@ from pathlib import Path
 
 from review_grade.matcher import Score, kill_gate, score_findings
 from review_grade.reviewer import (
+    HAIKU_MODEL,
     SONNET_MODEL,
     CredentialError,
     ProviderError,
@@ -163,13 +164,24 @@ def format_provider_error(message: str) -> str:
     return f"provider_error={message.strip()}\n"
 
 
+def claude_model_for(reviewer: str) -> str | None:
+    """Claude model id for a stress reviewer. Grok stays on the default reviewer."""
+    if reviewer == "haiku":
+        return HAIKU_MODEL
+    if reviewer == "sonnet":
+        return SONNET_MODEL
+    if reviewer == "grok":
+        return None
+    raise ValueError(f"unknown reviewer {reviewer}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--subset", type=Path, default=None)
     parser.add_argument("--cache", type=Path, default=None)
-    parser.add_argument("--reviewer", choices=("grok", "sonnet"), default="grok")
+    parser.add_argument("--reviewer", choices=("grok", "sonnet", "haiku"), default="grok")
     parser.add_argument("--diagnosis", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -183,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("stored subset does not match the selector")
 
     state = {"ok": 0, "err": 0, "last": ""}
+    model = claude_model_for(args.reviewer)
     cache: list[dict] = []
     if args.cache is not None and args.cache.exists():
         cache = json.loads(args.cache.read_text(encoding="utf-8"))
@@ -208,10 +221,10 @@ def main(argv: list[str] | None = None) -> int:
             return {"findings": []}
         print(f"review {index + 1} {url}", flush=True)
         try:
-            if args.reviewer == "sonnet":
-                payload = review_diff_claude(prompt)
-            else:
+            if model is None:
                 payload = review_diff(prompt)
+            else:
+                payload = review_diff_claude(prompt, model=model)
         except CredentialError:
             raise
         except ProviderError as exc:
@@ -241,7 +254,6 @@ def main(argv: list[str] | None = None) -> int:
     if state["ok"] == 0:
         write_provider_failure(state["last"] or "reviewer failed")
         return 2
-    model = SONNET_MODEL if args.reviewer == "sonnet" else None
     text = format_report(subset, result, model=model)
     if state["err"]:
         text += f"review_errors={state['err']}\n"

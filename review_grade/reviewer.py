@@ -15,6 +15,8 @@ import tempfile
 REVIEWER_MODEL = "grok-4.7-build-fast"
 # Sonnet rerun of the stored stress test. Not the default for a user diff.
 SONNET_MODEL = "claude-sonnet-5-5"
+# Haiku 4.5 stress run. Not the default for a user diff, and not the Sonnet id.
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 _FINDINGS_SCHEMA = json.dumps(
     {
@@ -85,13 +87,13 @@ def parse_reviewer_stdout(stdout: str) -> object:
     raise ProviderError("reviewer returned no findings")
 
 
-def claude_command() -> list[str]:
+def claude_command(model: str = SONNET_MODEL) -> list[str]:
     """Non-interactive Claude CLI argv. Tools are disabled. The prompt is stdin."""
     return [
         "claude",
         "-p",
         "--model",
-        SONNET_MODEL,
+        model,
         "--output-format",
         "json",
         "--tools",
@@ -134,13 +136,15 @@ def parse_claude_stdout(stdout: str) -> object:
     raise ProviderError("claude returned no findings")
 
 
-def review_diff_claude(prompt: str, *, timeout_s: int = 300) -> object:
-    """Send prefix-plus-diff through the Claude CLI on Sonnet 5.5."""
+def review_diff_claude(
+    prompt: str, *, model: str = SONNET_MODEL, timeout_s: int = 300
+) -> object:
+    """Send prefix-plus-diff through the Claude CLI. Defaults to Sonnet."""
     if not isinstance(prompt, str) or prompt == "":
         raise ProviderError("empty prompt")
     try:
         proc = subprocess.run(
-            claude_command(),
+            claude_command(model),
             input=prompt,
             capture_output=True,
             text=True,
