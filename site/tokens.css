@@ -1,0 +1,35 @@
+/* Review grade. Paper, ink, and one red mark. Each color is the day value, then the night value. */
+
+:root {
+  color-scheme: light dark;
+
+  --paper: light-dark(#f7f6f3, #171614);
+  --ink: light-dark(#141414, #f4f1ea);
+  --muted: light-dark(#5c5954, #a39e96);
+  --rule: light-dark(#d5d3cc, #322f2c);
+  --spine: light-dark(#c4c1b8, #3f3c38);
+  --red: light-dark(#b42318, #ee7a6c);
+  --green: light-dark(#1a5c32, #74b892);
+  --wash-add: light-dark(#e4f0e7, #1a2620);
+  --wash-del: light-dark(#f8ebe8, #241e1c);
+  --wash-bad: light-dark(#f6d4ce, #3a2c28);
+  --wash-note: light-dark(#f8ece8, #261f1c);
+  --wash-hot: light-dark(#f0c2ba, #46312d);
+  --selection: light-dark(#f3cfc8, #3f2e2a);
+
+  --serif: "Newsreader", "Iowan Old Style", Palatino, Georgia, serif;
+  --mono: "Courier Prime", "Courier New", Courier, monospace;
+
+  --text: 1.2rem;
+  --text-dek: 1.28rem;
+  --text-note: 1.05rem;
+  --text-code: 0.92rem;
+  --text-figure: 0.84rem;
+  --text-meta: 0.82rem;
+  --text-tag: 0.78rem;
+
+  --page: 78rem;
+  --measure: 46rem;
+  --gutter: 11.25rem;
+  --row: 1.65rem;
+}

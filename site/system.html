@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The system, Review grade</title>
+  <meta name="description" content="Colors and sizes live in tokens.css. The homepage and this page share review.css.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23f7f6f3' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23b42318' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23171614' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23ee7a6c' stroke-width='2'/%3E%3C/svg%3E" media="(prefers-color-scheme: dark)">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="review.css">
+</head>
+<body>
+  <a class="skip" href="#color">Skip to the system</a>
+  <div class="page">
+    <header>
+      <div class="running">
+        <a href="index.html">reviewgrade.dev</a>
+        <span>The system</span>
+      </div>
+      <div class="hero">
+        <h1 class="quiet">The <span class="grade">system</span></h1>
+        <p class="dek">Colors and sizes live in tokens.css. The homepage and this page share review.css.</p>
+      </div>
+      <nav aria-label="Contents">
+        <a href="#color">Color</a>
+        <a href="#type">Type</a>
+        <a href="#rules">Rules</a>
+        <a href="#finding">A finding</a>
+        <a href="#price">A price</a>
+        <a href="#do-not">Do not</a>
+      </nav>
+    </header>
+
+    <div class="body">
+      <section class="section" id="color">
+        <h2 class="mark">Color</h2>
+        <div class="copy wide">
+          <p>These are the only colors.</p>
+          <p>The first hex is the day value. The second is the night value.</p>
+          <ul class="swatches">
+            <li>
+              <span class="chip" style="background: var(--paper)" aria-hidden="true"></span>
+              <span class="role">Page</span>
+              <span class="name">#f7f6f3</span>
+              <span class="name">#171614</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--ink)" aria-hidden="true"></span>
+              <span class="role">Type</span>
+              <span class="name">#141414</span>
+              <span class="name">#f4f1ea</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--muted)" aria-hidden="true"></span>
+              <span class="role">Price and line number</span>
+              <span class="name">#5c5954</span>
+              <span class="name">#a39e96</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--red)" aria-hidden="true"></span>
+              <span class="role">The finding</span>
+              <span class="name">#b42318</span>
+              <span class="name">#ee7a6c</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--green)" aria-hidden="true"></span>
+              <span class="role">An added line</span>
+              <span class="name">#1a5c32</span>
+              <span class="name">#74b892</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--rule)" aria-hidden="true"></span>
+              <span class="role">Section rule</span>
+              <span class="name">#d5d3cc</span>
+              <span class="name">#322f2c</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--spine)" aria-hidden="true"></span>
+              <span class="role">Margin and leaders</span>
+              <span class="name">#c4c1b8</span>
+              <span class="name">#3f3c38</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--wash-del)" aria-hidden="true"></span>
+              <span class="role">Behind a removed line</span>
+              <span class="name">#f8ebe8</span>
+              <span class="name">#241e1c</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--wash-add)" aria-hidden="true"></span>
+              <span class="role">Behind an added line</span>
+              <span class="name">#e4f0e7</span>
+              <span class="name">#1a2620</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--wash-bad)" aria-hidden="true"></span>
+              <span class="role">Behind the bad line</span>
+              <span class="name">#f6d4ce</span>
+              <span class="name">#3a2c28</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--wash-note)" aria-hidden="true"></span>
+              <span class="role">Note on hover</span>
+              <span class="name">#f8ece8</span>
+              <span class="name">#261f1c</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--wash-hot)" aria-hidden="true"></span>
+              <span class="role">Bad line on hover</span>
+              <span class="name">#f0c2ba</span>
+              <span class="name">#46312d</span>
+            </li>
+            <li>
+              <span class="chip" style="background: var(--selection)" aria-hidden="true"></span>
+              <span class="role">Selection</span>
+              <span class="name">#f3cfc8</span>
+              <span class="name">#3f2e2a</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="type">
+        <h2 class="mark">Type</h2>
+        <div class="copy">
+          <p>The title is Newsreader. On the homepage it is larger.</p>
+          <p>Newsreader is for reading. Body copy stops at 46rem.</p>
+          <p class="sample-serif">Your agent wrote the diff, so it is the wrong reviewer.</p>
+          <p>Courier Prime is for a path, a price, a line number, or code. A price and a line number are muted.</p>
+          <p class="sample-mono">billing/charge.py</p>
+          <p class="sample-mono is-muted">$0.15</p>
+          <p class="sample-mono is-muted">17</p>
+          <p class="sample-mono">    if user.can_charge:</p>
+          <p class="sample-mono">ra_live_…</p>
+          <p>The key is shown once.</p>
+        </div>
+      </section>
+
+      <section class="section" id="rules">
+        <h2 class="mark">Rules</h2>
+        <div class="copy">
+          <p>The page stops at 78rem. The label column is 11.25rem.</p>
+          <p>Below 980px the label column stacks and the margin line hides. Below 760px a diff row is 1.4rem.</p>
+          <div class="rules">
+            <div>
+              <div class="rule-mast"></div>
+              <p>3px ink across the running head and the footer.</p>
+            </div>
+            <div>
+              <div class="rule-ink"></div>
+              <p>1px ink on a file name and on the top and bottom of a figure.</p>
+            </div>
+            <div>
+              <div class="rule-section"></div>
+              <p>1px rule between sections.</p>
+            </div>
+            <div>
+              <div class="rule-dot"></div>
+              <p>A dotted spine is the leader on a price.</p>
+            </div>
+          </div>
+          <div class="running in-copy">
+            <span>250 left</span>
+            <span>$0.15 a review</span>
+          </div>
+          <p>This head shows credits left and the price of one review.</p>
+        </div>
+      </section>
+
+      <section class="section" id="finding">
+        <h2 class="mark">A finding</h2>
+        <div class="copy wide">
+          <p>The note starts on the bad line.</p>
+          <p class="file">billing/charge.py</p>
+          <div class="hunk">
+            <div class="code" role="group" aria-label="The bad line">
+              <div class="row bad">
+                <span class="ln hot">17</span>
+                <span class="sg bad">+</span>
+                <span class="src bad">    if <span class="markbad">user.can_charge</span>:</span>
+              </div>
+            </div>
+            <aside class="note flush">
+              <p class="where">billing/charge.py:17</p>
+              <p class="break">The permission check is inverted. A user who may not charge is debited.</p>
+              <p><span class="tag">fix</span>Raise PermissionError when can_charge is false, then call ledger.debit.</p>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="price">
+        <h2 class="mark">A price</h2>
+        <div class="copy">
+          <p>The name is italic. The leader is a dotted spine. The price is Courier Prime.</p>
+          <div class="offer">
+            <span class="name">A month</span>
+            <span class="leaders" aria-hidden="true"></span>
+            <span class="price">$25</span>
+          </div>
+          <p class="detail">250 reviews. Unused reviews end with the month.</p>
+        </div>
+      </section>
+
+      <section class="section" id="do-not">
+        <h2 class="mark">Do not</h2>
+        <div class="copy">
+          <p>No filled button. No card. No shadow. Corners stay square.</p>
+          <p>Red marks the finding. Green is only an added line.</p>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <span>reviewgrade.dev</span>
+      <span>paper, ink, one red</span>
+    </footer>
+  </div>
+</body>
+</html>

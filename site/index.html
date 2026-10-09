@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review grade</title>
+  <meta name="description" content="You send a diff. Review grade returns the file, the line, what breaks, and a one-line fix.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23f7f6f3' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23b42318' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23171614' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23ee7a6c' stroke-width='2'/%3E%3C/svg%3E" media="(prefers-color-scheme: dark)">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="review.css">
+</head>
+<body>
+  <a class="skip" href="#what">Skip to the product</a>
+  <div class="page">
+    <header>
+      <div class="running">
+        <span>reviewgrade.dev</span>
+        <span>$25 for 250</span>
+      </div>
+      <div class="hero">
+        <h1>Review <span class="grade">grade</span></h1>
+        <p class="dek">You send a diff. Review grade returns the file, the line, what breaks, and a one&#8209;line fix.</p>
+      </div>
+      <nav aria-label="Contents">
+        <a href="#what">What it is</a>
+        <a href="#example">An example</a>
+        <a href="#price">Price</a>
+        <a href="#call">The call</a>
+      </nav>
+    </header>
+
+    <div class="body">
+      <section class="section" id="what">
+        <h2 class="mark">What it is</h2>
+        <div class="copy">
+          <p>Your agent wrote the diff, so it is the wrong reviewer. It already decided the change was right.</p>
+          <p>Review grade sees only the diff. It reports that change when the new behavior is wrong, even if the edit looks helpful.</p>
+          <p>If nothing breaks, the list is empty. A failed review spends nothing, and there is no score.</p>
+        </div>
+      </section>
+
+      <section class="section" id="example">
+        <h2 class="mark">An example</h2>
+        <div class="copy wide">
+          <p>This diff is made up.</p>
+          <p class="file">billing/charge.py</p>
+          <div class="hunk">
+            <div class="code" role="group" aria-label="Example diff">
+              <div class="row">
+                <span class="ln">14</span>
+                <span class="sg"></span>
+                <span class="src">def charge(user, cents):</span>
+              </div>
+              <div class="row">
+                <span class="ln">15</span>
+                <span class="sg"></span>
+                <span class="src">    if cents &lt;= 0:</span>
+              </div>
+              <div class="row">
+                <span class="ln">16</span>
+                <span class="sg"></span>
+                <span class="src">        raise ValueError("cents")</span>
+              </div>
+              <div class="row">
+                <span class="ln"></span>
+                <span class="sg del">-</span>
+                <span class="src del">    if not user.can_charge:</span>
+              </div>
+              <div class="row">
+                <span class="ln"></span>
+                <span class="sg del">-</span>
+                <span class="src del">        raise PermissionError("charge")</span>
+              </div>
+              <div class="row bad">
+                <span class="ln hot">17</span>
+                <span class="sg bad">+</span>
+                <span class="src bad">    if <span class="markbad">user.can_charge</span>:</span>
+              </div>
+              <div class="row">
+                <span class="ln">18</span>
+                <span class="sg add">+</span>
+                <span class="src add">        return {"ok": True}</span>
+              </div>
+              <div class="row">
+                <span class="ln">19</span>
+                <span class="sg"></span>
+                <span class="src">    return ledger.debit(user.id, cents)</span>
+              </div>
+            </div>
+            <aside class="note">
+              <p class="where">billing/charge.py:17</p>
+              <p class="break">The permission check is inverted. A user who may not charge is debited.</p>
+              <p><span class="tag">fix</span>Raise PermissionError when can_charge is false, then call ledger.debit.</p>
+            </aside>
+          </div>
+
+        </div>
+      </section>
+
+      <section class="section" id="price">
+        <h2 class="mark">Price</h2>
+        <div class="copy">
+          <p>A review is $0.15. In the month it is $0.10.</p>
+
+          <div class="offer">
+            <span class="name">Twenty reviews, once</span>
+            <span class="leaders" aria-hidden="true"></span>
+            <span class="price">Free</span>
+          </div>
+          <p class="detail">One time per email.</p>
+
+          <div class="offer">
+            <span class="name">A month</span>
+            <span class="leaders" aria-hidden="true"></span>
+            <span class="price">$25</span>
+          </div>
+          <p class="detail">250 reviews. Unused reviews end with the month.</p>
+
+          <div class="offer">
+            <span class="name">Each review after that</span>
+            <span class="leaders" aria-hidden="true"></span>
+            <span class="price">$0.15</span>
+          </div>
+          <p class="detail">Stops at a cap you set. The cap starts at $50.</p>
+        </div>
+      </section>
+
+      <section class="section" id="call">
+        <h2 class="mark">The call</h2>
+        <div class="copy">
+          <p>POST /v1/reviews takes the diff and returns a run id. Poll GET /v1/runs/:id until the review is done.</p>
+          <figure class="fig">
+            <figcaption class="figcap">From an agent.</figcaption>
+            <pre><code>curl -s -H "Authorization: Bearer $REVIEW_GRADE_KEY" \
+  https://api.reviewgrade.dev/v1/reviews \
+  -d '{"diff":"...","source":"agent"}'</code></pre>
+          </figure>
+          <p>The site, the API, CI, and your agent spend the same balance.</p>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <span>reviewgrade.dev</span>
+      <span>file, line, what_breaks, fix</span>
+    </footer>
+  </div>
+</body>
+</html>
