@@ -318,7 +318,49 @@ pre {
   color: var(--ink);
 }
 
-.home .offer.month .price {
+.field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.8rem;
+  margin: 1.15rem 0 0.35rem;
+}
+
+.field label {
+  font-style: italic;
+}
+
+.field input {
+  flex: 1 1 8rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.15rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: var(--text-figure);
+}
+
+.act {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1.08rem;
+  cursor: pointer;
+}
+
+.act:hover { color: var(--red); }
+
+.secret { margin-top: 1.15rem; }
+
+.offer.month .price {
   color: var(--ink);
 }
 
