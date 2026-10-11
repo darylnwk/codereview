@@ -75,7 +75,6 @@
   function render() {
     document.querySelector("#email").textContent = state.email;
     document.querySelector("#left").textContent = String(left());
-    document.querySelector("#running-credits").textContent = String(left()) + " credits";
     document.querySelector("#used-line").textContent = state.finished + " of " + state.included + " are finished. Unused reviews end with the month.";
     var capInput = document.querySelector("#cap");
     if (document.activeElement !== capInput) capInput.value = String(state.cap);

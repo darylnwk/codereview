@@ -631,3 +631,74 @@ pre {
     animation: none;
   }
 }
+
+body.account .page {
+  max-width: 36rem;
+}
+
+body.account header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: var(--text-meta);
+  color: var(--ink);
+  border-bottom: 1px solid var(--ink);
+  padding: 1.4rem 0 0.45rem;
+}
+
+body.account header a {
+  color: inherit;
+}
+
+body.account header a:hover {
+  color: var(--red);
+}
+
+body.account main > p:first-child {
+  font-family: var(--serif);
+  margin: 1.1rem 0 0;
+  max-width: none;
+}
+
+body.account main p {
+  margin: 0 0 0.85rem;
+}
+
+body.account section > p:last-of-type {
+  margin-bottom: 0;
+}
+
+body.account .count {
+  font-family: var(--mono);
+  font-size: clamp(3.4rem, 12vw, 4.8rem);
+  line-height: 0.9;
+  margin: 1.5rem 0 0.2rem;
+  color: var(--ink);
+  font-weight: 400;
+  font-style: normal;
+}
+
+body.account .count + p {
+  font-style: italic;
+  margin: 0 0 0.85rem;
+}
+
+body.account #keys {
+  border-top: 1px solid var(--ink);
+  margin-top: 1.6rem;
+  padding-top: 1.15rem;
+}
+
+body.account h2 {
+  position: static;
+  font-style: italic;
+  font-weight: 450;
+  font-size: 1.35rem;
+  margin: 0 0 0.55rem;
+}
+
+body.account .key .detail {
+  grid-column: 1 / -1;
+  margin: 0;
+}
