@@ -416,6 +416,107 @@ pre {
   .row { grid-template-columns: 1.7rem 0.75rem minmax(0, 1fr); }
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .home .running {
+    border-top-color: transparent;
+    background-image: linear-gradient(var(--ink), var(--ink));
+    background-repeat: no-repeat;
+    background-position: top left;
+    background-size: 0 3px;
+    animation: draw-mast 680ms linear forwards;
+  }
+
+  .home .hero {
+    border-bottom-color: transparent;
+    background-image: linear-gradient(var(--ink), var(--ink));
+    background-repeat: no-repeat;
+    background-position: bottom left;
+    background-size: 0 1px;
+    animation: draw-rule 560ms linear 140ms forwards;
+  }
+
+  .home .body::before {
+    transform-origin: top center;
+    animation: draw-spine 1000ms linear 80ms forwards;
+  }
+
+  @supports (animation-timeline: view()) {
+    .home .markbad {
+      text-decoration: none;
+      background-image: linear-gradient(var(--red), var(--red));
+      background-repeat: no-repeat;
+      background-position: left calc(100% - 0.18em);
+      background-size: 100% 1.5px;
+      animation-name: draw-mark;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 30%;
+    }
+
+    .home .note {
+      border-top-color: transparent;
+      background-image: linear-gradient(var(--red), var(--red));
+      background-repeat: no-repeat;
+      background-position: top left;
+      background-size: 100% 1px;
+      animation-name: draw-note;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 36px;
+    }
+
+    .home .offer {
+      view-timeline-name: --offer;
+    }
+
+    .home .leaders {
+      animation-name: draw-leaders;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: --offer;
+      animation-range: entry 0% entry 100%;
+    }
+
+    .home footer {
+      border-top-color: transparent;
+      background-image: linear-gradient(var(--ink), var(--ink));
+      background-repeat: no-repeat;
+      background-position: top left;
+      background-size: 100% 3px;
+      animation-name: draw-mast;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 100%;
+    }
+  }
+}
+
+@keyframes draw-mast {
+  from { background-size: 0 3px; }
+  to { background-size: 100% 3px; }
+}
+@keyframes draw-rule { to { background-size: 100% 1px; } }
+@keyframes draw-spine { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes draw-mark { from { background-size: 0 1.5px; } to { background-size: 100% 1.5px; } }
+@keyframes draw-note { from { background-size: 0 1px; } to { background-size: 100% 1px; } }
+@keyframes draw-leaders { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+  .home .running,
+  .home .hero,
+  .home .body::before,
+  .home .markbad,
+  .home .note,
+  .home .leaders,
+  .home footer {
+    animation: none;
+  }
 }
