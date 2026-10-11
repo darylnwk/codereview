@@ -318,6 +318,18 @@ pre {
   color: var(--ink);
 }
 
+.home .offer.month .price {
+  color: var(--ink);
+}
+
+.home #price .rate {
+  white-space: nowrap;
+  background-image: linear-gradient(var(--ink), var(--ink));
+  background-repeat: no-repeat;
+  background-position: left calc(100% - 0.12em);
+  background-size: 100% 1px;
+}
+
 .swatches {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
@@ -482,6 +494,15 @@ pre {
       animation-range: entry 0% entry 100%;
     }
 
+    .home #price .rate {
+      animation-name: draw-rate;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: view();
+      animation-range: contain 0% contain 60%;
+    }
+
     .home footer {
       border-top-color: transparent;
       background-image: linear-gradient(var(--ink), var(--ink));
@@ -507,6 +528,10 @@ pre {
 @keyframes draw-mark { from { background-size: 0 1.5px; } to { background-size: 100% 1.5px; } }
 @keyframes draw-note { from { background-size: 0 1px; } to { background-size: 100% 1px; } }
 @keyframes draw-leaders { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes draw-rate {
+  from { background-size: 0 1px; }
+  to { background-size: 100% 1px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
@@ -516,6 +541,7 @@ pre {
   .home .markbad,
   .home .note,
   .home .leaders,
+  .home #price .rate,
   .home footer {
     animation: none;
   }
