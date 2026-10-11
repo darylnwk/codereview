@@ -320,10 +320,17 @@ pre {
 
 .field {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  gap: 0.35rem 0.8rem;
-  margin: 1.15rem 0 0.35rem;
+  justify-content: flex-start;
+  gap: 0.45rem 0.7rem;
+  margin: 0.2rem 0 0.35rem;
+}
+
+.field label,
+.field .act {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .field label {
@@ -331,8 +338,10 @@ pre {
 }
 
 .field input {
-  flex: 1 1 8rem;
+  flex: 0 1 12rem;
+  width: 12rem;
   min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 0.15rem 0;
   border: 0;
@@ -342,6 +351,40 @@ pre {
   color: var(--ink);
   font-family: var(--mono);
   font-size: var(--text-figure);
+}
+
+.field input#cap {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+}
+
+.key {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content) auto;
+  column-gap: 1.1rem;
+  row-gap: 0.15rem;
+  align-items: baseline;
+  justify-content: start;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 0.95rem;
+}
+
+.key .name {
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.key .prefix {
+  font-family: var(--mono);
+  font-size: var(--text-figure);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.copy .key .detail {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .act {

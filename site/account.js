@@ -62,6 +62,10 @@
     return Math.max(0, state.included - state.finished);
   }
 
+  function capLine() {
+    return "After 250 reviews, each one is $0.15 until the extra charge reaches $" + String(state.cap) + ".";
+  }
+
   function note(id, text) {
     var el = document.querySelector(id);
     el.textContent = text;
@@ -72,33 +76,33 @@
     document.querySelector("#email").textContent = state.email;
     document.querySelector("#left").textContent = String(left());
     document.querySelector("#running-credits").textContent = String(left()) + " credits";
-    document.querySelector("#used-line").textContent = state.finished + " of the " + state.included + " reviews are finished. Unused reviews end with the month.";
-    document.querySelector("#cap").value = String(state.cap);
-    document.querySelector("#cap-line").textContent = "Reviews after the 250 stop when the extra charge reaches $" + String(state.cap) + ".";
+    document.querySelector("#used-line").textContent = state.finished + " of " + state.included + " are finished. Unused reviews end with the month.";
+    var capInput = document.querySelector("#cap");
+    if (document.activeElement !== capInput) capInput.value = String(state.cap);
+    document.querySelector("#cap-line").textContent = capLine();
 
     var list = document.querySelector("#key-list");
     list.replaceChildren();
     state.keys.forEach(function (key, index) {
       var row = document.createElement("div");
-      row.className = "offer";
+      row.className = "key";
       var name = document.createElement("span");
       name.className = "name";
       name.textContent = key.name;
-      var leaders = document.createElement("span");
-      leaders.className = "leaders";
-      leaders.setAttribute("aria-hidden", "true");
-      var price = document.createElement("span");
-      price.className = "price";
-      price.textContent = key.prefix;
-      row.append(name, leaders, price);
-
+      var prefix = document.createElement("span");
+      prefix.className = "prefix";
+      prefix.textContent = key.prefix;
+      var used = key.last ? "Last used " + key.last + "." : "Not used yet.";
       var detail = document.createElement("p");
       detail.className = "detail";
-      var used = key.last ? "Last used " + key.last + "." : "Not used yet.";
+      detail.textContent = used;
+      row.append(name, prefix);
       if (key.revoked) {
-        detail.textContent = "Revoked. " + used;
+        var word = document.createElement("span");
+        word.className = "name";
+        word.textContent = "Revoked";
+        row.append(word);
       } else {
-        detail.append(document.createTextNode(used + " "));
         var button = document.createElement("button");
         button.type = "button";
         button.className = "act";
@@ -109,9 +113,10 @@
           save();
           render();
         });
-        detail.append(button);
+        row.append(button);
       }
-      list.append(row, detail);
+      row.append(detail);
+      list.append(row);
     });
 
     var secret = document.querySelector("#secret");
@@ -125,18 +130,33 @@
     }
   }
 
-  document.querySelector("#cap-form").addEventListener("submit", function (event) {
-    event.preventDefault();
-    var raw = document.querySelector("#cap").value.trim();
+  var capInput = document.querySelector("#cap");
+
+  function readCap(restore) {
+    var raw = capInput.value.trim();
     if (!/^\d+$/.test(raw)) {
-      note("#cap-note", "The cap is a whole number of dollars, from 0 up.");
-      document.querySelector("#cap").value = String(state.cap);
+      if (restore) {
+        capInput.value = String(state.cap);
+        note("#cap-note", "");
+        document.querySelector("#cap-line").textContent = capLine();
+      } else if (raw !== "") {
+        note("#cap-note", "Use a whole number of dollars, from 0 up.");
+      } else {
+        note("#cap-note", "");
+      }
       return;
     }
     note("#cap-note", "");
     state.cap = Number(raw);
     save();
-    render();
+    document.querySelector("#cap-line").textContent = capLine();
+  }
+
+  capInput.addEventListener("input", function () { readCap(false); });
+  capInput.addEventListener("blur", function () { readCap(true); });
+  document.querySelector("#cap-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    capInput.blur();
   });
 
   document.querySelector("#key-form").addEventListener("submit", function (event) {

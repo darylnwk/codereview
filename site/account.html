@@ -36,13 +36,12 @@
       <section class="section" id="account">
         <h2 class="mark">Account</h2>
         <div class="copy">
-          <p>This page keeps the account in this browser. It does not send a magic link, and a key made here cannot spend a credit.</p>
           <div class="offer">
             <span class="name">Email</span>
             <span class="leaders" aria-hidden="true"></span>
             <span class="price" id="email">ada@example.com</span>
           </div>
-          <p class="detail">Sign-in is an email magic link.</p>
+          <p class="detail">Sign-in is an email magic link. This browser keeps the account. A key made here cannot spend a credit.</p>
         </div>
       </section>
 
@@ -54,28 +53,15 @@
             <span class="leaders" aria-hidden="true"></span>
             <span class="price" id="left">214</span>
           </div>
-          <p class="detail" id="used-line">36 of the 250 reviews are finished. Unused reviews end with the month.</p>
-
-          <div class="offer month">
-            <span class="name">A month</span>
-            <span class="leaders" aria-hidden="true"></span>
-            <span class="price">$25</span>
-          </div>
-          <p class="detail">250 reviews at $0.10 each.</p>
-
-          <div class="offer">
-            <span class="name">Each review after 250</span>
-            <span class="leaders" aria-hidden="true"></span>
-            <span class="price">$0.15</span>
-          </div>
-          <p class="detail">A failed review spends nothing.</p>
+          <p class="detail" id="used-line">36 of 250 are finished. Unused reviews end with the month.</p>
 
           <form class="field" id="cap-form">
-            <label for="cap">Monthly cap</label>
+            <label for="cap">Cap</label>
             <input id="cap" name="cap" inputmode="numeric" autocomplete="off" value="50">
-            <button class="act" type="submit">Set cap</button>
+            <span>dollars</span>
           </form>
-          <p class="detail" id="cap-line">Reviews after the 250 stop when the extra charge reaches $50.</p>
+          <p class="detail" id="cap-line">After 250 reviews, each one is $0.15 until the extra charge reaches $50.</p>
+          <p class="detail">A failed review spends nothing.</p>
           <p class="detail" id="cap-note" hidden></p>
         </div>
       </section>
@@ -85,18 +71,18 @@
         <div class="copy">
           <p>The site, the API, CI, and your agent spend the same balance.</p>
           <div id="key-list">
-            <div class="offer">
+            <div class="key">
               <span class="name">ci</span>
-              <span class="leaders" aria-hidden="true"></span>
-              <span class="price">ra_live_7kQm3aP1</span>
+              <span class="prefix">ra_live_7kQm3aP1</span>
+              <button class="act" type="button">Revoke</button>
+              <p class="detail">Last used 2 Oct.</p>
             </div>
-            <p class="detail">Last used 2 Oct. <button class="act" type="button">Revoke</button></p>
-            <div class="offer">
+            <div class="key">
               <span class="name">agent</span>
-              <span class="leaders" aria-hidden="true"></span>
-              <span class="price">ra_live_p2nR8cQw</span>
+              <span class="prefix">ra_live_p2nR8cQw</span>
+              <button class="act" type="button">Revoke</button>
+              <p class="detail">Not used yet.</p>
             </div>
-            <p class="detail">Not used yet. <button class="act" type="button">Revoke</button></p>
           </div>
 
           <form class="field" id="key-form">
