@@ -94,11 +94,15 @@ A website submit and an API submit write the same `runs` row. `source` is `web`,
 ```
 POST /v1/reviews        body: { diff, files?, source? }
                         202 { run_id } after key, credit, and size checks
-GET  /v1/runs/:id       { status, findings, partial, cost_usd }
+GET  /v1/runs/:id       { status, findings, partial, omitted, cost_usd }
 GET  /v1/me             { credits }
 ```
 
 `status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not spend a credit. The credit decrements only when status flips to `done`.
+
+Send an `Idempotency-Key` header to repeat the same 202 response for the same diff. That same idempotency key with a different diff returns 409.
+
+A queued GET has `findings` null. An empty list is reserved for a finished review that found nothing.
 
 Size:
 
@@ -109,6 +113,8 @@ Size:
 20,000 changed lines is a dump, not a review. A normal pull request is under 200 lines. A thousand is already large.
 
 Rate limit: 10 accepts per minute per key. No batch endpoint. Many pulls are many `POST /v1/reviews` calls, polled separately.
+
+A limit of 10 accepts per minute counts 202 responses only.
 
 ### Agent
 
