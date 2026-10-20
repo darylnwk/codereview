@@ -25,7 +25,8 @@ class SubsetTests(unittest.TestCase):
         self.assertEqual(urls, [item["pr_url"] for item in second])
         self.assertEqual(len(urls), len(set(urls)))
         self.assertGreater(len(first), 0)
-        self.assertLessEqual(len(first), 20)
+        self.assertEqual(len(first), len(rows))
+        self.assertEqual(len(first), 100)
 
         style_dropped = 0
         kept = {
@@ -47,12 +48,16 @@ class SubsetTests(unittest.TestCase):
                     style_dropped += 1
         self.assertGreater(style_dropped, 0)
 
+        self.assertEqual(
+            sorted(item["pr_url"] for item in first),
+            sorted(row["pr_url_to_review"] for row in rows),
+        )
         for item in first:
-            self.assertGreaterEqual(len(item["issues"]), 3)
-            self.assertLessEqual(len(item["issues"]), 8)
+            self.assertGreaterEqual(len(item["issues"]), 1)
             for issue in item["issues"]:
                 path = issue["file_path"]
-                self.assertTrue(path.lower().endswith((".py", ".ts", ".tsx")))
+                self.assertIsInstance(path, str)
+                self.assertTrue(path.strip())
                 rule = issue.get("rule_name")
                 self.assertTrue(rule is None or str(rule).strip().upper() in {"", "NONE"})
                 if isinstance(rule, str):

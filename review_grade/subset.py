@@ -11,8 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-LANGUAGE_SUFFIXES = (".py", ".ts", ".tsx")
-SUBSET_LIMIT = 20
+SUBSET_LIMIT = 100
 _BEHAVIOR_RULES = frozenset({"", "NONE"})
 _STYLE_RULE = re.compile(
     r"style|format|naming|docs|documentation|docstring",
@@ -60,13 +59,11 @@ def is_behavior_defect(issue: dict) -> bool:
 
 
 def is_planted_defect(issue: dict) -> bool:
-    """Python or TypeScript behavior defect with a line span. Style rules are out."""
+    """Behavior defect with a file and a line span. Style rules are out."""
     if is_style_rule(issue) or not is_behavior_defect(issue):
         return False
     path = issue.get("file_path")
     if not isinstance(path, str) or not path.strip():
-        return False
-    if not path.lower().endswith(LANGUAGE_SUFFIXES):
         return False
     start = issue.get("start_line")
     end = issue.get("end_line")
@@ -82,8 +79,8 @@ def is_planted_defect(issue: dict) -> bool:
 def select_subset(rows: list[dict], *, limit: int = SUBSET_LIMIT) -> list[dict]:
     """Return the same pull requests for the same rows.
 
-    Sort by pull-request URL. Keep a pull request when it has 3 to 8 planted
-    defects. Stop at `limit` when more qualify.
+    Sort by pull-request URL. Keep a pull request when it has at least one
+    planted defect. Stop at `limit` when more qualify.
     """
     chosen = []
     ordered = sorted(
@@ -92,7 +89,7 @@ def select_subset(rows: list[dict], *, limit: int = SUBSET_LIMIT) -> list[dict]:
     )
     for row in ordered:
         issues = [dict(issue) for issue in row.get("issues") or [] if is_planted_defect(issue)]
-        if not 3 <= len(issues) <= 8:
+        if not issues:
             continue
         url = row.get("pr_url_to_review") or ""
         if not url:

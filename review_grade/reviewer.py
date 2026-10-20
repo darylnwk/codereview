@@ -63,6 +63,8 @@ def _credential_error(message: str) -> bool:
             "no credential",
             "api key",
             "authentication",
+            "weekly limit",
+            "rate limit",
         )
     )
 
@@ -173,9 +175,25 @@ def review_diff_claude(
 
 
 def review_diff(prompt: str, *, model: str = REVIEWER_MODEL, timeout_s: int = 300) -> object:
-    """Send prefix-plus-diff to the reviewer and return the findings object."""
+    """Send prefix-plus-diff to the reviewer and return the findings object.
+
+    One retry covers a transient non-json reply. The prompt is unchanged.
+    """
     if not isinstance(prompt, str) or prompt == "":
         raise ProviderError("empty prompt")
+    last: ProviderError | None = None
+    for _attempt in range(2):
+        try:
+            return _review_diff_once(prompt, model=model, timeout_s=timeout_s)
+        except CredentialError:
+            raise
+        except ProviderError as exc:
+            last = exc
+    assert last is not None
+    raise last
+
+
+def _review_diff_once(prompt: str, *, model: str, timeout_s: int) -> object:
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
     )
@@ -188,6 +206,7 @@ def review_diff(prompt: str, *, model: str = REVIEWER_MODEL, timeout_s: int = 30
                 "grok",
                 "--prompt-file",
                 path,
+                "--verbatim",
                 "-m",
                 model,
                 "--max-turns",
@@ -196,6 +215,7 @@ def review_diff(prompt: str, *, model: str = REVIEWER_MODEL, timeout_s: int = 30
                 "json",
                 "--disable-web-search",
                 "--no-plan",
+                "--no-subagents",
                 "--tools",
                 "",
                 "--system-prompt-override",

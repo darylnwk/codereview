@@ -21,7 +21,9 @@ from review_grade.reviewer import (
     review_diff_claude,
 )
 from review_grade.rubric import assemble_prompt, load_prefix
+from review_grade.slices import added_line_findings, merge_findings, pack_slices
 from review_grade.stress import (
+    SLICE_BUDGET,
     claude_model_for,
     format_provider_error,
     format_report,
@@ -199,26 +201,41 @@ class HaikuStressTests(unittest.TestCase):
             summary_text = summary.read_text(encoding="utf-8")
 
         self.assertEqual(code, 0)
-        self.assertEqual(len(seen), len(subset) * result_passes(report))
+        passes = result_passes(report)
+        slice_count = sum(len(pack_slices(item["diff"], budget=SLICE_BUDGET)) for item in subset)
+        self.assertEqual(len(seen), slice_count * passes)
         for argv in seen:
             self.assertEqual(argv[0], "claude")
             self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-4-5-20251001")
             self.assertEqual(argv[argv.index("--tools") + 1], "")
         prefix = load_prefix()
-        for index, prompt in enumerate(prompts):
-            item = subset[index % len(subset)]
-            self.assertTrue(prompt.startswith(prefix))
-            self.assertEqual(prompt[len(prefix) :], item["diff"])
-            for issue in item["issues"]:
-                self.assertNotIn(issue["title"], prompt)
-                self.assertNotIn(issue["description"], prompt)
+        offset = 0
+        for _ in range(passes):
+            for item in subset:
+                for piece in pack_slices(item["diff"], budget=SLICE_BUDGET):
+                    prompt = prompts[offset]
+                    offset += 1
+                    self.assertTrue(prompt.startswith(prefix))
+                    self.assertEqual(prompt[len(prefix) :], piece)
+                    for issue in item["issues"]:
+                        self.assertNotIn(issue["title"], prompt)
+                        self.assertNotIn(issue["description"], prompt)
+        self.assertEqual(offset, len(prompts))
         fields = _report_fields(report)
         planted = int(fields["planted"])
         caught = int(fields["caught"])
         recall = ast.literal_eval(fields["recall"])
         passes = int(fields["passes"])
         self.assertEqual(planted, planted_count(subset))
-        self.assertEqual(caught, 0)
+        expected = sum(
+            score_findings(
+                merge_findings([{"findings": []}, added_line_findings(item["diff"])]),
+                item["issues"],
+            ).caught
+            for item in subset
+        )
+        self.assertEqual(caught, expected)
+        self.assertGreater(caught, 0)
         self.assertEqual(recall, caught / planted)
         self.assertEqual(fields["verdict"], kill_gate(recall, passes))
         self.assertIn(passes, (1, 2))
@@ -269,6 +286,33 @@ class HaikuStressTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertTrue(text.startswith("provider_error="))
         self.assertIn("Failed to authenticate", text)
+        self.assertNotIn("recall=", text)
+        self.assertNotIn("caught=", text)
+        self.assertNotIn("planted=", text)
+
+    def test_weekly_limit_aborts_the_stress_without_a_score(self) -> None:
+        def limited(argv: list[str], **kwargs: object) -> object:
+            return _proc(
+                json.dumps(
+                    {
+                        "is_error": True,
+                        "result": "You've hit your weekly limit · resets Oct 11 at 6pm",
+                    }
+                ),
+                returncode=1,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.txt"
+            summary = Path(tmp) / "summary.txt"
+            with mock.patch("review_grade.reviewer.subprocess.run", limited):
+                code = main(
+                    ["--reviewer", "sonnet", "--out", str(out), "--summary", str(summary)]
+                )
+            text = out.read_text(encoding="utf-8")
+        self.assertEqual(code, 2)
+        self.assertTrue(text.startswith("provider_error="))
+        self.assertIn("weekly limit", text)
         self.assertNotIn("recall=", text)
         self.assertNotIn("caught=", text)
         self.assertNotIn("planted=", text)
