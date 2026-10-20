@@ -38,7 +38,7 @@ Expansion only after 5 of 10 trial users run a second review:
 
 - Team pack: 50 runs for $79, shared balance.
 
-Refund rule: if the reviewer fails, do not decrement the credit.
+Refund rule: if the reviewer fails, do not decrement the credit. The decrement is conditional, in the same transaction as the flip to `done`. The update matches a user row only when credits are greater than 0. If that update changes no row, the run is `failed` and credits stay 0.
 
 ## User interface
 
@@ -98,7 +98,9 @@ GET  /v1/runs/:id       { status, findings, partial, omitted, cost_usd }
 GET  /v1/me             { credits }
 ```
 
-`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not spend a credit. The credit decrements only when status flips to `done`.
+`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not spend a credit. The credit decrements only when status flips to `done`. That decrement is in the same transaction. It matches a user only when credits are greater than 0. If it changes no row, the run is `failed` and credits stay 0. A second GET of a done run returns the same findings and does not decrement again. If the process dies before that transaction, the run stays queued, and the restarted worker charges once.
+
+When the body includes `files`, a done run sets `partial` true and `omitted` to the paths that were not selected. A done review of the full diff sets `partial` false and `omitted` to an empty list. A queued GET keeps `partial` false and `omitted` [] until the run is done.
 
 Send an `Idempotency-Key` header to repeat the same 202 response for the same diff. That same idempotency key with a different diff returns 409.
 
@@ -164,7 +166,7 @@ Anthropic: mark the rubric with a cache breakpoint. Default TTL is 5 minutes, re
 - The product writes the review. The user does not.
 - Reviewer: Gemini 3.8 Flash or Grok 4 Fast. Input: rubric and diff. Output: findings JSON.
 - A strong model is only for the internal benchmark, to see if the reviewer still catches known bugs.
-- Cap $0.15 projected. Log tokens, cache read, cache write, and dollars on every run.
+- Cap $0.15 projected. Log dollars on every done run. `review_diff` does not return token counts, so `cache_read` and `cache_write` stay null on a fixture run and on the default reviewer.
 
 ## Internal benchmark
 
@@ -197,6 +199,8 @@ Re-run this when the rubric or the model changes. If recall drops under 70%, sto
 - `users(email, credits, stripe_customer_id)`
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
+
+`cache_read` and `cache_write` are columns on `runs`. They stay null. `review_diff` does not return token counts, and a fixture run does not invent them. `omitted` lists paths left out when the request included `files`. A queued GET leaves it empty.
 
 ## What not to do
 

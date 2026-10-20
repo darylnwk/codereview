@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 import sqlite3
 import threading
@@ -13,6 +14,12 @@ from datetime import datetime, timezone
 
 SEED_EMAIL = "seed@reviewgrade.dev"
 _LIVE_PREFIX = "ra_live_"
+_RUN_COLUMNS = (
+    ("claim_token", "TEXT"),
+    ("omitted_pending", "TEXT"),
+    ("cache_read", "INTEGER"),
+    ("cache_write", "INTEGER"),
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -43,7 +50,11 @@ CREATE TABLE IF NOT EXISTS runs (
     cost_usd REAL,
     source TEXT NOT NULL,
     idempotency_key TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    claim_token TEXT,
+    omitted_pending TEXT,
+    cache_read INTEGER,
+    cache_write INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS runs_user_idempotency
     ON runs(user_id, idempotency_key)
@@ -87,9 +98,16 @@ class Store:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL").fetchone()
         self._conn.executescript(_SCHEMA)
+        self._ensure_run_columns()
 
     def close(self) -> None:
         self._conn.close()
+
+    def _ensure_run_columns(self) -> None:
+        have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(runs)")}
+        for name, decl in _RUN_COLUMNS:
+            if name not in have:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
 
     @contextmanager
     def transaction(self):
@@ -158,6 +176,7 @@ class Store:
         diff_text: str,
         source: str,
         idempotency_key: str | None,
+        omitted_pending: str | None = None,
     ) -> str:
         with self._lock:
             return self._insert_queued(
@@ -167,7 +186,105 @@ class Store:
                 diff_text=diff_text,
                 source=source,
                 idempotency_key=idempotency_key,
+                omitted_pending=omitted_pending,
             )
+
+    def release_queued_claims(self) -> None:
+        with self.transaction():
+            self._conn.execute(
+                """
+                UPDATE runs
+                SET claim_token = NULL
+                WHERE status = 'queued' AND claim_token IS NOT NULL
+                """
+            )
+
+    def claim_oldest(self, token: str) -> sqlite3.Row | None:
+        with self.transaction():
+            cursor = self._conn.execute(
+                """
+                UPDATE runs
+                SET claim_token = ?
+                WHERE rowid = (
+                    SELECT rowid FROM runs
+                    WHERE status = 'queued' AND claim_token IS NULL
+                    ORDER BY created_at ASC, rowid ASC
+                    LIMIT 1
+                )
+                AND status = 'queued'
+                AND claim_token IS NULL
+                RETURNING id, user_id, diff_text, created_at, omitted_pending
+                """,
+                (token,),
+            )
+            return cursor.fetchone()
+
+    def mark_failed(self, run_id: str, token: str) -> bool:
+        with self.transaction():
+            return (
+                self._close(
+                    run_id,
+                    token,
+                    status="failed",
+                    findings_json=None,
+                    cost_usd=None,
+                    partial=0,
+                    omitted_json=None,
+                )
+                == 1
+            )
+
+    def mark_done(
+        self,
+        run_id: str,
+        token: str,
+        user_id: int,
+        findings: list,
+        cost: float,
+        partial: bool,
+        omitted_json: str | None,
+    ) -> str:
+        with self.transaction():
+            owned = self._conn.execute(
+                """
+                SELECT id FROM runs
+                WHERE id = ? AND status = 'queued' AND claim_token = ?
+                """,
+                (run_id, token),
+            ).fetchone()
+            if owned is None:
+                return "lost"
+            credited = self._conn.execute(
+                """
+                UPDATE users
+                SET credits = credits - 1
+                WHERE id = ? AND credits > 0
+                """,
+                (user_id,),
+            ).rowcount
+            if credited != 1:
+                self._close(
+                    run_id,
+                    token,
+                    status="failed",
+                    findings_json=None,
+                    cost_usd=None,
+                    partial=0,
+                    omitted_json=None,
+                )
+                return "failed"
+            closed = self._close(
+                run_id,
+                token,
+                status="done",
+                findings_json=json.dumps(findings),
+                cost_usd=cost,
+                partial=1 if partial else 0,
+                omitted_json=omitted_json,
+            )
+            if closed != 1:
+                raise RuntimeError("queued run disappeared after the credit update")
+            return "done"
 
     def _user_id(self, email: str) -> int | None:
         row = self._conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
@@ -259,14 +376,16 @@ class Store:
         diff_text: str,
         source: str,
         idempotency_key: str | None,
+        omitted_pending: str | None,
     ) -> str:
         run_id = "run_" + secrets.token_urlsafe(12)
         self._conn.execute(
             """
             INSERT INTO runs (
                 id, user_id, key_id, diff_hash, diff_text, findings_json, status,
-                partial, omitted_json, cost_usd, source, idempotency_key, created_at
-            ) VALUES (?, ?, ?, ?, ?, NULL, 'queued', 0, NULL, NULL, ?, ?, ?)
+                partial, omitted_json, cost_usd, source, idempotency_key, created_at,
+                omitted_pending
+            ) VALUES (?, ?, ?, ?, ?, NULL, 'queued', 0, NULL, NULL, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -277,6 +396,44 @@ class Store:
                 source,
                 idempotency_key,
                 format_time(datetime.now(timezone.utc)),
+                omitted_pending,
             ),
         )
         return run_id
+
+    def _close(
+        self,
+        run_id: str,
+        token: str,
+        *,
+        status: str,
+        findings_json: str | None,
+        cost_usd: float | None,
+        partial: int,
+        omitted_json: str | None,
+    ) -> int:
+        cursor = self._conn.execute(
+            """
+            UPDATE runs
+            SET status = ?,
+                findings_json = ?,
+                diff_text = NULL,
+                cost_usd = ?,
+                partial = ?,
+                omitted_json = ?,
+                claim_token = NULL,
+                cache_read = NULL,
+                cache_write = NULL
+            WHERE id = ? AND status = 'queued' AND claim_token = ?
+            """,
+            (
+                status,
+                findings_json,
+                cost_usd,
+                partial,
+                omitted_json,
+                run_id,
+                token,
+            ),
+        )
+        return int(cursor.rowcount)

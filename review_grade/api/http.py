@@ -116,6 +116,9 @@ def accept_review(
             if price_cap and over_cap(decision.kept_diff):
                 denied = refuse("too_expensive")
                 return denied.status, _error_body(denied)
+            pending = None
+            if decision.omitted is not None:
+                pending = json.dumps(list(decision.omitted))
             run_id = store.insert_queued(
                 user_id=key.user_id,
                 key_id=key.id,
@@ -123,6 +126,7 @@ def accept_review(
                 diff_text=decision.kept_diff,
                 source=decision.source,
                 idempotency_key=idempotency_key,
+                omitted_pending=pending,
             )
             return decision.status, {"run_id": run_id}
         if isinstance(decision, Replay):
