@@ -20,11 +20,13 @@ The unit sold is a review, not access to a model.
 
 | Offer | Price | What they get |
 | --- | --- | --- |
-| Pack of 10 runs | $19 | Ten reviews, web or API, same balance |
-| Single run | $3 | One review |
-| Free trial | 2 runs | Enough to see a review, not enough to live in CI |
+| Trial | $0 | 20 reviews, once per email. Enough to see a day of pull requests, not enough to leave running in CI |
+| Month | $25 | 250 reviews, which is $0.10 each. Unused reviews end with the month |
+| Each review after that | $0.15 | Same balance, until the monthly cap they set. The cap starts at $50 |
 
-Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents to about $0.15. Refuse any run projected over $0.15. At $1.90 effective per pack run, margin stays wide.
+A finished review outside the month is $0.15. The month is the cheaper rate: 250 reviews for $25 is $0.10 each. There is no single-review product and no pack of ten.
+
+Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents. Refuse any run projected over $0.15. The month only stays profitable if a typical run stays under $0.10.
 
 They pay because CI or their agent gets a structured review back, with a run id and a credit receipt. A chat will also review a diff. It will not sit in the pipeline.
 
@@ -36,7 +38,7 @@ What does not sell:
 
 Expansion only after 5 of 10 trial users run a second review:
 
-- Team pack: 50 runs for $79, shared balance.
+- Shared balance for a team, at the same prices. $25 a month, then $0.15 a review.
 
 Refund rule: if the reviewer fails, do not decrement the credit. The decrement is conditional, in the same transaction as the flip to `done`. The update matches a user row only when credits are greater than 0. If that update changes no row, the run is `failed` and credits stay 0.
 
@@ -46,7 +48,7 @@ Three screens. No practice list. No dashboard. No review box.
 
 ### 1. Review
 
-- Header: credits remaining, "Buy 10 for $19", link to Keys.
+- Header: credits remaining, "$0.15 a review", "A month is $25 for 250", link to Keys.
 - One input: the diff (paste or file).
 - Size line under the diff: changed lines, and the largest files.
 - Submit disabled until the diff is non-empty, or until it is over the hard cap.
@@ -73,7 +75,7 @@ Shown when the run is `done`. The page polls. The request does not wait on the m
 ### Auth and money
 
 - Magic link. Email in, link in, session cookie.
-- Stripe Checkout for the $19 pack. Success returns to Review with 10 credits.
+- Stripe Checkout for the $25 month. Success returns to Review with 250 credits. Further finished reviews bill at $0.15 until the monthly cap.
 - Account row: email, credits, Stripe customer id.
 
 ### What the UI will not have in v1
@@ -191,8 +193,8 @@ Re-run this when the rubric or the model changes. If recall drops under 70%, sto
 1. Benchmark subset and kill-gate number. Blocks Stripe.
 2. Reviewer worker, async run row, size check, cache logging.
 3. Three screens against the same review function.
-4. Keys, Stripe pack, Action snippet.
-5. Ten users. Five of ten run a second review unprompted: add the team pack. Else stop.
+4. Keys, Stripe month, Action snippet.
+5. Ten users. Five of ten run a second review unprompted: add the shared team balance. Else stop.
 
 ## Tables
 

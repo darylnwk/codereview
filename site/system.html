@@ -3,222 +3,141 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The system, Review grade</title>
-  <meta name="description" content="Colors and sizes live in tokens.css. The homepage and this page share review.css.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23f7f6f3' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23b42318' stroke-width='2'/%3E%3C/svg%3E">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%23171614' width='32' height='32'/%3E%3Cpath d='M5 23h22' stroke='%23ee7a6c' stroke-width='2'/%3E%3C/svg%3E" media="(prefers-color-scheme: dark)">
+  <title>Design system, Review grade</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="tokens.css">
-  <link rel="stylesheet" href="review.css">
+  <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="home.css">
+  <style>
+    .sys { padding-bottom: var(--s-9); }
+    .sys h1 { font: 400 var(--t-xl)/1 var(--f-display); margin: var(--s-7) 0 var(--s-3); }
+    .sys h2 { font: 400 var(--t-lg)/1.1 var(--f-display); margin: 0 0 var(--s-5); }
+    .sys section { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,10fr); gap: var(--s-6); border-top: 1px solid var(--c-line); padding: var(--s-7) 0; }
+    .sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-3); }
+    .sw div { border: 1px solid var(--c-line); border-radius: var(--r-1); overflow: hidden; font: 400 var(--t-xs)/1.4 var(--f-mono); }
+    .sw i { display: block; height: 4.5rem; }
+    .sw span { display: block; padding: var(--s-2) var(--s-3); color: var(--c-bone-dim); }
+    .sw b { color: var(--c-bone); font-weight: 500; }
+    .row { display: grid; grid-template-columns: 9rem 1fr; gap: var(--s-4); align-items: baseline; padding: var(--s-3) 0; border-bottom: 1px solid var(--c-line); }
+    .row > .meta { text-transform: none; letter-spacing: 0; }
+    .demo { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-bottom: var(--s-5); }
+    .bar { height: 12px; background: var(--c-mark); }
+    .ease { display: grid; grid-template-columns: 9rem 1fr; gap: var(--s-4); align-items: center; padding: var(--s-2) 0; }
+    .ease .track { height: 14px; border-bottom: 1px solid var(--c-line); position: relative; }
+    .ease .dot { position: absolute; left: 0; top: 0; width: 14px; height: 14px; background: var(--c-mark); }
+    .ease:hover .dot, .ease:focus-within .dot { transform: translateX(calc(min(40rem, 60vw))); }
+    .rules { color: var(--c-bone-dim); max-width: 46rem; }
+    .rules li { margin-bottom: var(--s-2); }
+    @media (max-width: 960px) { .sys section { grid-template-columns: minmax(0,1fr); gap: var(--s-3); } .row, .ease { grid-template-columns: minmax(0,1fr); gap: var(--s-1); } }
+  </style>
 </head>
 <body>
-  <a class="skip" href="#color">Skip to the system</a>
-  <div class="page">
-    <header>
-      <div class="running">
-        <a href="index.html">reviewgrade.dev</a>
-        <span>The system</span>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top wrap">
+    <a class="mark" href="index.html"><span class="mark__sq" aria-hidden="true"></span>review<span>/</span>grade</a>
+    <nav class="top__nav" aria-label="Primary"><a class="link" href="index.html">Home</a><a class="link" href="account.html">Account</a></nav>
+    <span class="tag">System v2</span>
+  </header>
+  <main id="main" class="sys wrap">
+    <p class="eyebrow">Night proof</p>
+    <h1>Design system</h1>
+    <p class="lede">Carbon ground, bone ink. One highlighter for the agent's finding, one rust for what breaks. The diff is the hero of every page; chrome stays out of its way. Tokens live in <code>tokens.css</code>, components in <code>site.css</code>.</p>
+
+    <section aria-labelledby="c"><p class="eyebrow">01</p><div>
+      <h2 id="c">Colour</h2>
+      <div class="sw">
+        <div><i style="background:var(--c-carbon)"></i><span><b>--c-carbon</b><br>#12110f ground</span></div>
+        <div><i style="background:var(--c-carbon-2)"></i><span><b>--c-carbon-2</b><br>#1a1916 raised</span></div>
+        <div><i style="background:var(--c-carbon-3)"></i><span><b>--c-carbon-3</b><br>#24221e hover</span></div>
+        <div><i style="background:var(--c-line-strong)"></i><span><b>--c-line(-strong)</b><br>#34312b / #4a463e</span></div>
+        <div><i style="background:var(--c-bone)"></i><span><b>--c-bone</b><br>#ede7d8 · 15.6:1</span></div>
+        <div><i style="background:var(--c-bone-dim)"></i><span><b>--c-bone-dim</b><br>#a59f90 · 7.3:1</span></div>
+        <div><i style="background:var(--c-bone-faint)"></i><span><b>--c-bone-faint</b><br>#8a8476 · 5.1:1</span></div>
+        <div><i style="background:var(--c-mark)"></i><span><b>--c-mark</b><br>#d9f24a finding</span></div>
+        <div><i style="background:var(--c-rust)"></i><span><b>--c-rust</b><br>#ff7a4d breaks</span></div>
+        <div><i style="background:var(--c-add)"></i><span><b>--c-add</b><br>#8fcf9a fix / add</span></div>
+        <div><i style="background:var(--c-del)"></i><span><b>--c-del</b><br>#e08a7a removed</span></div>
       </div>
-      <div class="hero">
-        <h1 class="quiet">The <span class="grade">system</span></h1>
-        <p class="dek">Colors and sizes live in tokens.css. The homepage and this page share review.css.</p>
+      <ul class="rules"><li>Highlighter yellow appears once per view at most as a fill: the primary action, or the finding being read.</li><li>Rust only ever means "this breaks". Never decoration.</li><li>No gradients, no blur. The read head is a flat 9% wash.</li></ul>
+    </div></section>
+
+    <section aria-labelledby="t"><p class="eyebrow">02</p><div>
+      <h2 id="t">Type</h2>
+      <div class="row"><span class="meta">--t-display<br>Instrument Serif</span><span class="display" style="font-size:clamp(2.6rem,6vw,5rem)">Something else <em>should read it.</em></span></div>
+      <div class="row"><span class="meta">--t-xl</span><span class="h2">What comes back is <em>four fields</em>.</span></div>
+      <div class="row"><span class="meta">--t-lg</span><span style="font:400 var(--t-lg)/1.1 var(--f-display)">Month</span></div>
+      <div class="row"><span class="meta">--t-md<br>Schibsted Grotesk</span><span class="lede">Send a pull request diff. Get the file, the line, what breaks.</span></div>
+      <div class="row"><span class="meta">--t-base</span><span>Body copy. Short sentences. Say what it does, and what it does not.</span></div>
+      <div class="row"><span class="meta">--t-code<br>JetBrains Mono</span><code style="background:none;border:0">POST /v1/reviews → 202 { run_id }</code></div>
+      <div class="row"><span class="meta">--t-xs eyebrow</span><span class="eyebrow">§02 &nbsp;Mono caps, tracked 0.08em</span></div>
+    </div></section>
+
+    <section aria-labelledby="sp"><p class="eyebrow">03</p><div>
+      <h2 id="sp">Space &amp; radius</h2>
+      <div class="row"><span class="meta">--s-1 · 4px</span><div class="bar" style="width:var(--s-1)"></div></div>
+      <div class="row"><span class="meta">--s-2 · 8px</span><div class="bar" style="width:var(--s-2)"></div></div>
+      <div class="row"><span class="meta">--s-3 · 12px</span><div class="bar" style="width:var(--s-3)"></div></div>
+      <div class="row"><span class="meta">--s-4 · 16px</span><div class="bar" style="width:var(--s-4)"></div></div>
+      <div class="row"><span class="meta">--s-5 · 24px</span><div class="bar" style="width:var(--s-5)"></div></div>
+      <div class="row"><span class="meta">--s-6 · 32px</span><div class="bar" style="width:var(--s-6)"></div></div>
+      <div class="row"><span class="meta">--s-7 · 48px</span><div class="bar" style="width:var(--s-7)"></div></div>
+      <div class="row"><span class="meta">--s-8 · 72px</span><div class="bar" style="width:var(--s-8)"></div></div>
+      <div class="row"><span class="meta">--s-9 · 112px</span><div class="bar" style="width:var(--s-9)"></div></div>
+      <div class="row"><span class="meta">--r-0 / 1 / 2</span><span class="meta">0 · 2px · 4px. Nearly square. Round is only for the numbered pin.</span></div>
+    </div></section>
+
+    <section aria-labelledby="m"><p class="eyebrow">04</p><div>
+      <h2 id="m">Motion</h2>
+      <p class="rules">Transform and opacity only. Things arrive with <code>--e-out</code>; the read head travels with <code>--e-in-out</code>; the highlighter lands with <code>--e-snap</code>. Under <code>prefers-reduced-motion</code> every duration is 0 and the hero shows its finished review. Hover a row to play it.</p>
+      <div class="ease" tabindex="0"><span class="meta">--d-fast 160ms<br>--e-out</span><div class="track"><i class="dot" style="transition:transform var(--d-fast) var(--e-out)"></i></div></div>
+      <div class="ease" tabindex="0"><span class="meta">--d-base 280ms<br>--e-snap</span><div class="track"><i class="dot" style="transition:transform var(--d-base) var(--e-snap)"></i></div></div>
+      <div class="ease" tabindex="0"><span class="meta">--d-slow 520ms<br>--e-out</span><div class="track"><i class="dot" style="transition:transform var(--d-slow) var(--e-out)"></i></div></div>
+      <div class="ease" tabindex="0"><span class="meta">260ms / line<br>--e-in-out</span><div class="track"><i class="dot" style="transition:transform 1.2s var(--e-in-out)"></i></div></div>
+    </div></section>
+
+    <section aria-labelledby="b"><p class="eyebrow">05</p><div>
+      <h2 id="b">Buttons, links, tags</h2>
+      <div class="demo"><a class="btn btn--mark" href="#b">Primary <span class="arr" aria-hidden="true">→</span></a><button class="btn" type="button">Secondary</button><button class="btn" type="button" disabled>Disabled</button><a class="btn btn--quiet link" href="#b">Quiet</a></div>
+      <div class="demo"><a class="link" href="#b">An inline link redraws its rule on hover</a></div>
+      <div class="demo"><span class="tag">neutral</span><span class="tag tag--mark">recommended</span><span class="tag tag--breaks">breaks</span><span class="tag tag--fix">fix</span><span class="tag tag--todo">placeholder</span></div>
+    </div></section>
+
+    <section aria-labelledby="i"><p class="eyebrow">06</p><div>
+      <h2 id="i">Inputs</h2>
+      <div style="display:grid;gap:var(--s-5);max-width:32rem">
+        <div class="field"><label for="k">Key name</label><input class="input" id="k" placeholder="ci"><span class="hint">Shown once. Prefix ra_live_.</span></div>
+        <div class="field"><label for="d">Diff</label><textarea class="textarea" id="d" rows="4" placeholder="Paste a unified diff"></textarea><span class="hint">0 changed lines</span></div>
       </div>
-      <nav aria-label="Contents">
-        <a href="#color">Color</a>
-        <a href="#type">Type</a>
-        <a href="#rules">Rules</a>
-        <a href="#finding">A finding</a>
-        <a href="#price">A price</a>
-        <a href="#do-not">Do not</a>
-      </nav>
-    </header>
+    </div></section>
 
-    <div class="body">
-      <section class="section" id="color">
-        <h2 class="mark">Color</h2>
-        <div class="copy wide">
-          <p>These are the only colors.</p>
-          <p>The first hex is the day value. The second is the night value.</p>
-          <ul class="swatches">
-            <li>
-              <span class="chip" style="background: var(--paper)" aria-hidden="true"></span>
-              <span class="role">Page</span>
-              <span class="name">#f7f6f3</span>
-              <span class="name">#171614</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--ink)" aria-hidden="true"></span>
-              <span class="role">Type</span>
-              <span class="name">#141414</span>
-              <span class="name">#f4f1ea</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--muted)" aria-hidden="true"></span>
-              <span class="role">Price and line number</span>
-              <span class="name">#5c5954</span>
-              <span class="name">#a39e96</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--red)" aria-hidden="true"></span>
-              <span class="role">The finding</span>
-              <span class="name">#b42318</span>
-              <span class="name">#ee7a6c</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--green)" aria-hidden="true"></span>
-              <span class="role">An added line</span>
-              <span class="name">#1a5c32</span>
-              <span class="name">#74b892</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--rule)" aria-hidden="true"></span>
-              <span class="role">Section rule</span>
-              <span class="name">#d5d3cc</span>
-              <span class="name">#322f2c</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--spine)" aria-hidden="true"></span>
-              <span class="role">Margin and leaders</span>
-              <span class="name">#c4c1b8</span>
-              <span class="name">#3f3c38</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--wash-del)" aria-hidden="true"></span>
-              <span class="role">Behind a removed line</span>
-              <span class="name">#f8ebe8</span>
-              <span class="name">#241e1c</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--wash-add)" aria-hidden="true"></span>
-              <span class="role">Behind an added line</span>
-              <span class="name">#e4f0e7</span>
-              <span class="name">#1a2620</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--wash-bad)" aria-hidden="true"></span>
-              <span class="role">Behind the bad line</span>
-              <span class="name">#f6d4ce</span>
-              <span class="name">#3a2c28</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--wash-note)" aria-hidden="true"></span>
-              <span class="role">Note on hover</span>
-              <span class="name">#f8ece8</span>
-              <span class="name">#261f1c</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--wash-hot)" aria-hidden="true"></span>
-              <span class="role">Bad line on hover</span>
-              <span class="name">#f0c2ba</span>
-              <span class="name">#46312d</span>
-            </li>
-            <li>
-              <span class="chip" style="background: var(--selection)" aria-hidden="true"></span>
-              <span class="role">Selection</span>
-              <span class="name">#f3cfc8</span>
-              <span class="name">#3f2e2a</span>
-            </li>
-          </ul>
+    <section aria-labelledby="cd"><p class="eyebrow">07</p><div>
+      <h2 id="cd">Code, diff, finding</h2>
+      <div class="code" style="margin-bottom:var(--s-5)"><div class="code__bar"><span>bash</span><span>.code</span></div><pre><code>curl -s https://api.reviewgrade.dev/v1/runs/<span class="s">$RUN</span></code></pre></div>
+      <div class="diff" data-state="done" style="margin-bottom:var(--s-5)">
+        <div class="diff__head"><span class="diff__file">api/limits.ts</span><span class="diff__status"><i aria-hidden="true"></i>done · 1 finding</span></div>
+        <div class="diff__body">
+          <div class="dl"><span class="n">8</span><span class="g"> </span><span class="t">export function allow(n: number) {</span></div>
+          <div class="dl dl--del"><span class="n">9</span><span class="g">−</span><span class="t">  return n &lt; LIMIT;</span></div>
+          <div class="dl dl--add is-flagged"><span class="n">9</span><span class="g">+</span><span class="t">  return n <span class="hl">&lt;=</span> LIMIT;</span><span class="pin" aria-hidden="true">1</span></div>
+          <div class="dl"><span class="n">10</span><span class="g"> </span><span class="t">}</span></div>
         </div>
-      </section>
+      </div>
+      <div class="finding" style="max-width:34rem">
+        <p class="finding__where"><span class="tag tag--breaks">1</span><b>api/limits.ts:9</b></p>
+        <p class="finding__breaks">Off by one: a caller at the limit is now allowed one extra request.</p>
+        <p class="finding__fix">return n &lt; LIMIT;</p>
+      </div>
+      <p class="hint" style="margin-top:var(--s-3)">Example content, written for this page.</p>
+    </div></section>
 
-      <section class="section" id="type">
-        <h2 class="mark">Type</h2>
-        <div class="copy">
-          <p>The title is Newsreader. On the homepage it is larger.</p>
-          <p>Newsreader is for reading. Body copy stops at 46rem.</p>
-          <p class="sample-serif">Your agent wrote the diff, so it is the wrong reviewer.</p>
-          <p>Courier Prime is for a path, a price, a line number, or code. A price and a line number are muted.</p>
-          <p class="sample-mono">billing/charge.py</p>
-          <p class="sample-mono is-muted">$0.15</p>
-          <p class="sample-mono is-muted">17</p>
-          <p class="sample-mono">    if user.can_charge:</p>
-          <p class="sample-mono">ra_live_…</p>
-          <p>The key is shown once.</p>
-        </div>
-      </section>
-
-      <section class="section" id="rules">
-        <h2 class="mark">Rules</h2>
-        <div class="copy">
-          <p>The page stops at 78rem. The label column is 11.25rem.</p>
-          <p>Below 980px the label column stacks and the margin line hides. Below 760px a diff row is 1.4rem.</p>
-          <div class="rules">
-            <div>
-              <div class="rule-mast"></div>
-              <p>3px ink across the running head and the footer.</p>
-            </div>
-            <div>
-              <div class="rule-ink"></div>
-              <p>1px ink on a file name and on the top and bottom of a figure.</p>
-            </div>
-            <div>
-              <div class="rule-section"></div>
-              <p>1px rule between sections.</p>
-            </div>
-            <div>
-              <div class="rule-dot"></div>
-              <p>A dotted spine is the leader on a price.</p>
-            </div>
-          </div>
-          <div class="running in-copy">
-            <span>250 left</span>
-            <span>$0.15 a review</span>
-          </div>
-          <p>This head shows credits left and the price of one review.</p>
-        </div>
-      </section>
-
-      <section class="section" id="finding">
-        <h2 class="mark">A finding</h2>
-        <div class="copy wide">
-          <p>The note starts on the bad line.</p>
-          <p class="file">billing/charge.py</p>
-          <div class="hunk">
-            <div class="code" role="group" aria-label="The bad line">
-              <div class="row bad">
-                <span class="ln hot">17</span>
-                <span class="sg bad">+</span>
-                <span class="src bad">    if <span class="markbad">user.can_charge</span>:</span>
-              </div>
-            </div>
-            <aside class="note flush">
-              <p class="where">billing/charge.py:17</p>
-              <p class="break">The permission check is inverted. A user who may not charge is debited.</p>
-              <p><span class="tag">fix</span>Raise PermissionError when can_charge is false, then call ledger.debit.</p>
-            </aside>
-          </div>
-        </div>
-      </section>
-
-      <section class="section" id="price">
-        <h2 class="mark">A price</h2>
-        <div class="copy">
-          <p>The name is italic. The leader is a dotted spine. The price is Courier Prime.</p>
-          <div class="offer">
-            <span class="name">A month</span>
-            <span class="leaders" aria-hidden="true"></span>
-            <span class="price">$25</span>
-          </div>
-          <p class="detail">250 reviews. Unused reviews end with the month.</p>
-        </div>
-      </section>
-
-      <section class="section" id="do-not">
-        <h2 class="mark">Do not</h2>
-        <div class="copy">
-          <p>No filled button. No card. No shadow. Corners stay square.</p>
-          <p>Red marks the finding. Green is only an added line.</p>
-        </div>
-      </section>
-    </div>
-
-    <footer>
-      <span>reviewgrade.dev</span>
-      <span>paper, ink, one red</span>
-    </footer>
-  </div>
+    <section aria-labelledby="pr"><p class="eyebrow">08</p><div>
+      <h2 id="pr">Pricing tier</h2>
+      <div class="tiers" style="grid-template-columns:minmax(0,22rem)">
+        <article class="tier tier--rec"><span class="tag tag--mark tier__flag">Recommended</span><h3 class="tier__name">Month</h3><p class="tier__price"><span class="tier__amt">$25</span><span class="tier__unit">per month</span></p><p class="tier__for">One line on who it is for.</p><a class="btn btn--mark tier__cta" href="#pr">Primary <span class="arr" aria-hidden="true">→</span></a><ul class="tier__list"><li>Checklist item</li><li>Checklist item</li></ul></article>
+      </div>
+    </div></section>
+  </main>
 </body>
 </html>

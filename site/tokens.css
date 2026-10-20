@@ -1,35 +1,104 @@
-/* Review grade. Paper, ink, and one red mark. Each color is the day value, then the night value. */
+/* Review grade design tokens, v2 ("Night proof").
+   Carbon ground, bone ink, one highlighter for findings, one rust for what breaks.
+   Every component reads from here. Legacy names at the bottom keep account.html working. */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
-  --paper: light-dark(#f7f6f3, #171614);
-  --ink: light-dark(#141414, #f4f1ea);
-  --muted: light-dark(#5c5954, #a39e96);
-  --rule: light-dark(#d5d3cc, #322f2c);
-  --spine: light-dark(#c4c1b8, #3f3c38);
-  --red: light-dark(#b42318, #ee7a6c);
-  --green: light-dark(#1a5c32, #74b892);
-  --wash-add: light-dark(#e4f0e7, #1a2620);
-  --wash-del: light-dark(#f8ebe8, #241e1c);
-  --wash-bad: light-dark(#f6d4ce, #3a2c28);
-  --wash-note: light-dark(#f8ece8, #261f1c);
-  --wash-hot: light-dark(#f0c2ba, #46312d);
-  --selection: light-dark(#f3cfc8, #3f2e2a);
+  /* Colour: surfaces */
+  --c-carbon: #12110f;      /* page ground */
+  --c-carbon-2: #1a1916;    /* raised: code blocks, inputs */
+  --c-carbon-3: #24221e;    /* hover / selected row */
+  --c-line: #34312b;        /* hairlines */
+  --c-line-strong: #4a463e;
 
-  --serif: "Newsreader", "Iowan Old Style", Palatino, Georgia, serif;
-  --mono: "Courier Prime", "Courier New", Courier, monospace;
+  /* Colour: ink */
+  --c-bone: #ede7d8;        /* body text  15.6:1 on carbon */
+  --c-bone-dim: #a59f90;    /* secondary   7.3:1 */
+  --c-bone-faint: #8a8476;  /* line numbers, meta 5.1:1 */
 
-  --text: 1.2rem;
-  --text-dek: 1.28rem;
-  --text-note: 1.05rem;
-  --text-code: 0.92rem;
-  --text-figure: 0.84rem;
-  --text-meta: 0.82rem;
-  --text-tag: 0.78rem;
+  /* Colour: signal (one fill per view is the rule) */
+  --c-mark: #d9f24a;        /* highlighter: the agent's finding */
+  --c-mark-ink: #12110f;
+  --c-mark-wash: rgba(217, 242, 74, 0.10);
+  --c-rust: #ff7a4d;        /* what breaks */
+  --c-rust-wash: rgba(255, 122, 77, 0.12);
+  --c-add: #8fcf9a;
+  --c-add-wash: rgba(143, 207, 154, 0.08);
+  --c-del: #e08a7a;
+  --c-del-wash: rgba(224, 138, 122, 0.08);
 
+  /* Type families */
+  --f-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --f-text: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Type scale */
+  --t-xs: 0.75rem;
+  --t-sm: 0.875rem;
+  --t-base: 1.0625rem;
+  --t-md: 1.25rem;
+  --t-lg: 1.625rem;
+  --t-xl: clamp(2rem, 1.4rem + 2.4vw, 3.25rem);
+  --t-display: clamp(3.1rem, 1.6rem + 6.6vw, 8.5rem);
+  --t-code: 0.8125rem;
+  --lh-tight: 0.92;
+  --lh-snug: 1.25;
+  --lh-text: 1.55;
+  --lh-code: 1.75;
+  --track-caps: 0.08em;
+
+  /* Spacing (4px base) */
+  --s-1: 0.25rem; --s-2: 0.5rem; --s-3: 0.75rem; --s-4: 1rem; --s-5: 1.5rem;
+  --s-6: 2rem; --s-7: 3rem; --s-8: 4.5rem; --s-9: 7rem;
+
+  /* Radius: nearly square */
+  --r-0: 0; --r-1: 2px; --r-2: 4px;
+
+  /* Layout */
+  --w-page: 88rem;
+  --w-measure: 38rem;
+  --gutter: clamp(1.25rem, 4vw, 3.5rem);
+
+  /* Motion */
+  --d-instant: 90ms;
+  --d-fast: 160ms;
+  --d-base: 280ms;
+  --d-slow: 520ms;
+  --d-scan: 3600ms;
+  --e-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --e-snap: cubic-bezier(0.3, 1.4, 0.5, 1);
+
+  /* ---- Legacy aliases (review.css / account.html) ---- */
+  --paper: var(--c-carbon);
+  --ink: var(--c-bone);
+  --muted: var(--c-bone-dim);
+  --rule: var(--c-line);
+  --spine: var(--c-line-strong);
+  --red: var(--c-rust);
+  --green: var(--c-add);
+  --wash-add: var(--c-add-wash);
+  --wash-del: var(--c-del-wash);
+  --wash-bad: var(--c-rust-wash);
+  --wash-note: var(--c-carbon-2);
+  --wash-hot: var(--c-rust-wash);
+  --selection: rgba(217, 242, 74, 0.3);
+  --serif: var(--f-text);
+  --mono: var(--f-mono);
+  --text: 1.0625rem;
+  --text-dek: 1.25rem;
+  --text-note: 1rem;
+  --text-code: 0.85rem;
+  --text-figure: 0.8rem;
+  --text-meta: 0.78rem;
+  --text-tag: 0.72rem;
   --page: 78rem;
   --measure: 46rem;
-  --gutter: 11.25rem;
+  --gutter-legacy: 11.25rem;
   --row: 1.65rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --d-instant: 0ms; --d-fast: 0ms; --d-base: 0ms; --d-slow: 0ms; --d-scan: 0ms; }
 }

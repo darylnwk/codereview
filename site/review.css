@@ -123,7 +123,7 @@ a { color: inherit; }
 .body::before {
   content: "";
   position: absolute;
-  left: var(--gutter);
+  left: var(--gutter-legacy);
   top: 0;
   bottom: 0;
   width: 1px;
@@ -132,7 +132,7 @@ a { color: inherit; }
 
 .section {
   display: grid;
-  grid-template-columns: var(--gutter) minmax(0, 1fr);
+  grid-template-columns: var(--gutter-legacy) minmax(0, 1fr);
   border-top: 1px solid var(--rule);
 }
 
