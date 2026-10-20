@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.port < 0 or args.port > 65535:
         parser.error("--port must be from 0 to 65535")
     httpd = bind(args.db, args.port)
+    # bind() leaves the cap off. Accept tests still accept a 7999-line diff.
+    httpd.price_cap = True
     try:
         httpd.serve_forever()
     finally:

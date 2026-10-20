@@ -20,6 +20,7 @@ _REFUSALS = {
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),
+    "too_expensive": (413, "The review would cost more than $0.15."),
     "rate_limited": (429, "Too many reviews were accepted in the last minute."),
 }
 
@@ -161,7 +162,7 @@ def _parse_payload(
 
 def _size(diff: str) -> Refused | None:
     paths = _paths(diff)
-    count = _changed_line_count(diff)
+    count = changed_line_count(diff)
     generated_only = bool(paths) and all(_generated(path) for path in paths)
     if generated_only and count < _LINE_CAP:
         return refuse("too_large")
@@ -172,7 +173,7 @@ def _size(diff: str) -> Refused | None:
     return refuse("too_large")
 
 
-def _changed_line_count(diff: str) -> int:
+def changed_line_count(diff: str) -> int:
     count = 0
     for line in diff.splitlines():
         if line.startswith("+++") or line.startswith("---"):

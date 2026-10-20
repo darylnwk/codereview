@@ -24,7 +24,7 @@ The unit sold is a review, not access to a model.
 | Single run | $3 | One review |
 | Free trial | 2 runs | Enough to see a review, not enough to live in CI |
 
-Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents to about $0.15. Refuse any run projected over $0.30. At $1.90 effective per pack run, margin stays wide.
+Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents to about $0.15. Refuse any run projected over $0.15. At $1.90 effective per pack run, margin stays wide.
 
 They pay because CI or their agent gets a structured review back, with a run id and a credit receipt. A chat will also review a diff. It will not sit in the pipeline.
 
@@ -109,6 +109,7 @@ Size:
 - Under 8,000 changed lines: review.
 - 8,000 to 20,000: `413` with the file list. They resend with `files`. No credit on the 413.
 - Over 20,000, or generated files only: `413`. No credit.
+- Projected price over $0.15: `413` with `too_expensive`. The message is "The review would cost more than $0.15." The price is $0.00002 per changed line. 7,501 changed lines is over the cap. A 20-line diff is $0.0004 and is still accepted. No run is inserted and no credit is spent.
 
 20,000 changed lines is a dump, not a review. A normal pull request is under 200 lines. A thousand is already large.
 
@@ -163,7 +164,7 @@ Anthropic: mark the rubric with a cache breakpoint. Default TTL is 5 minutes, re
 - The product writes the review. The user does not.
 - Reviewer: Gemini 3.8 Flash or Grok 4 Fast. Input: rubric and diff. Output: findings JSON.
 - A strong model is only for the internal benchmark, to see if the reviewer still catches known bugs.
-- Cap $0.30 projected. Log tokens, cache read, cache write, and dollars on every run.
+- Cap $0.15 projected. Log tokens, cache read, cache write, and dollars on every run.
 
 ## Internal benchmark
 
