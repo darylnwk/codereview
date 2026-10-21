@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 
 from review_grade.api.http import bind
+from review_grade.api.stripe_billing import load_stripe_env
+from review_grade.api.stripe_http import StripeClient
 from review_grade.api.worker import Worker, reviewer_for
 
 
@@ -21,7 +23,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.port < 0 or args.port > 65535:
         parser.error("--port must be from 0 to 65535")
-    httpd = bind(args.db, args.port)
+    # Read Stripe env names only when present. Never create or set secrets here.
+    stripe_env = load_stripe_env()
+    stripe_client = None if stripe_env is None else StripeClient(stripe_env.secret_key)
+    httpd = bind(args.db, args.port, stripe_client=stripe_client, stripe_env=stripe_env)
     # bind() leaves the cap off. Accept tests still accept a 7999-line diff.
     httpd.price_cap = True
     worker = None

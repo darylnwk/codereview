@@ -34,6 +34,8 @@ from review_grade.api.plans import (
     reviews_left_this_period,
 )
 from review_grade.api.store import Billing, Key, Store, format_time
+from review_grade.api.stripe_billing import StripeEnv, handle_stripe_webhook
+from review_grade.api.stripe_http import StripeClient
 
 # Test-only hooks. Production leaves these None.
 after_cap_check: Callable[[], None] | None = None
@@ -52,12 +54,22 @@ class ReviewServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     store: Store
+    stripe_client: StripeClient | None = None
+    stripe_env: StripeEnv | None = None
 
 
-def bind(db_path: str, port: int) -> ReviewServer:
+def bind(
+    db_path: str,
+    port: int,
+    *,
+    stripe_client: StripeClient | None = None,
+    stripe_env: StripeEnv | None = None,
+) -> ReviewServer:
     store = Store(db_path)
     server = ReviewServer(("127.0.0.1", port), _handler(store))
     server.store = store
+    server.stripe_client = stripe_client
+    server.stripe_env = stripe_env
     return server
 
 
@@ -81,6 +93,16 @@ def _handler(store: Store):
         def do_POST(self) -> None:
             raw = _read_body(self)
             path = urlsplit(self.path).path
+            if path == "/v1/stripe/webhook":
+                status, body = receive_stripe_webhook(
+                    store,
+                    getattr(self.server, "stripe_client", None),
+                    getattr(self.server, "stripe_env", None),
+                    raw,
+                    self.headers.get("Stripe-Signature"),
+                )
+                _send(self, status, body)
+                return
             token = _bearer(self.headers.get("Authorization"))
             price_cap = bool(getattr(self.server, "price_cap", False))
             if path != "/v1/reviews":
@@ -99,6 +121,32 @@ def _handler(store: Store):
             return
 
     return Handler
+
+
+def receive_stripe_webhook(
+    store: Store,
+    client: StripeClient | None,
+    env: StripeEnv | None,
+    raw: bytes | None,
+    signature_header: str | None,
+) -> tuple[int, dict]:
+    """POST /v1/stripe/webhook — verify signature, apply once by event id."""
+    if client is None or env is None:
+        return 503, {"error": "stripe_unconfigured"}
+    if raw is None:
+        return 400, {"error": "invalid_payload"}
+    return handle_stripe_webhook(
+        store,
+        client,
+        payload=raw,
+        signature_header=signature_header,
+        webhook_secret=env.webhook_secret,
+        price_for_plan={
+            "developer": env.price_developer,
+            "fleet": env.price_fleet,
+        },
+        now=_wall_now(),
+    )
 
 
 def _cap_reached_message(plan, billing: Billing, *, now: datetime | None = None) -> str:

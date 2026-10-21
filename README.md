@@ -31,6 +31,10 @@ cd site && python3 -m http.server 8000
 
 Open `http://127.0.0.1:8000/`. Account pages use mock data only.
 
+## Stripe (TEST mode)
+
+Card on file uses Checkout **setup** mode. Env var names and Dashboard objects (webhook events, prices) are listed in `docs/stripe-env.md` — names only, no values. The API never creates or writes those secrets; wire them in the host environment when ready.
+
 ## How to test
 
 ```bash
