@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review grade: code review your agent can call</title>
+  <meta name="description" content="Code review your agent can call. One API call per diff. Only what breaks, with the fix. Pre-release.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%2312110f' width='32' height='32'/%3E%3Crect x='6' y='13' width='20' height='7' fill='%23d9f24a'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="home.css">
+  <script>document.documentElement.classList.remove('no-js')</script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top wrap">
+    <a class="mark" href="index.html" aria-label="Review grade, home"><span class="mark__sq" aria-hidden="true"></span>review<span>/</span>grade</a>
+    <nav aria-label="Primary" class="top__nav">
+      <a class="link" href="#returns">What comes back</a>
+      <a class="link" href="#where">Where it runs</a>
+      <a class="link" href="#price">Price</a>
+      <a class="link" href="account.html">Account</a>
+    </nav>
+    <span class="tag tag--mark">Pre-release</span>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-h">
+      <div class="hero__copy">
+        <p class="eyebrow rv">§01 &nbsp;Code review, as an API call</p>
+        <h1 id="hero-h" class="display rv" style="--i:1">Code review <em>your agent</em> can&nbsp;call.</h1>
+        <p class="lede rv" style="--i:2">One API call per diff. Only what breaks, with the fix. From $0.10 a review, and failed runs are free.</p>
+        <div class="hero__cta rv" style="--i:3">
+          <a class="btn btn--mark" href="#notyet">Join the early list <span class="arr" aria-hidden="true">→</span></a>
+          <a class="btn btn--quiet link" href="#returns">See the response</a>
+        </div>
+      </div>
+
+      <figure class="hero__fig rv" style="--i:2">
+        <div class="diff" id="hero-diff" data-state="idle">
+          <div class="diff__head">
+            <span class="diff__file">billing/charge.py <span class="dim">+6 −2</span></span>
+            <span class="diff__status" aria-live="polite"><i aria-hidden="true"></i><span id="hero-status">queued</span></span>
+          </div>
+          <div class="diff__body" role="group" aria-label="Example diff of billing/charge.py">
+            <div class="readhead" aria-hidden="true"></div>
+            <div class="dl"><span class="n">12</span><span class="g"> </span><span class="t">def charge(user, cents, order_id):</span></div>
+            <div class="dl"><span class="n">13</span><span class="g"> </span><span class="t">    if cents &lt;= 0:</span></div>
+            <div class="dl"><span class="n">14</span><span class="g"> </span><span class="t">        raise ValueError("cents")</span></div>
+            <div class="dl dl--del"><span class="n">15</span><span class="g">−</span><span class="t">    if not user.can_charge:</span></div>
+            <div class="dl dl--del"><span class="n">16</span><span class="g">−</span><span class="t">        raise PermissionError("charge")</span></div>
+            <div class="dl dl--add" data-finding="1"><span class="n">15</span><span class="g">+</span><span class="t">    if <span class="hl">user.can_charge</span>:</span><span class="pin" aria-hidden="true">1</span></div>
+            <div class="dl dl--add"><span class="n">16</span><span class="g">+</span><span class="t">        return {"ok": True}</span></div>
+            <div class="dl dl--add" data-finding="2"><span class="n">17</span><span class="g">+</span><span class="t">    key = <span class="hl">f"{user.id}:{cents}"</span></span><span class="pin" aria-hidden="true">2</span></div>
+            <div class="dl dl--add"><span class="n">18</span><span class="g">+</span><span class="t">    if key in receipts:</span></div>
+            <div class="dl dl--add"><span class="n">19</span><span class="g">+</span><span class="t">        return receipts[key]</span></div>
+            <div class="dl"><span class="n">20</span><span class="g"> </span><span class="t">    return ledger.debit(user.id, cents)</span></div>
+          </div>
+          <ol class="findings" aria-label="Findings">
+            <li class="finding" data-for="1">
+              <p class="finding__where"><span class="tag tag--breaks">1</span><b>billing/charge.py:15</b></p>
+              <p class="finding__breaks">The permission check is inverted. A user who may charge gets a fake success; a user who may not is debited.</p>
+              <p class="finding__fix">if not user.can_charge: raise PermissionError("charge")</p>
+            </li>
+            <li class="finding" data-for="2">
+              <p class="finding__where"><span class="tag tag--breaks">2</span><b>billing/charge.py:17</b></p>
+              <p class="finding__breaks">Two orders of the same amount share a key. The second order returns the first receipt and is never debited.</p>
+              <p class="finding__fix">key = order_id</p>
+            </li>
+          </ol>
+        </div>
+        <figcaption class="meta hero__cap">Illustrative. The diff and both findings were written for this page, not produced by a run.</figcaption>
+      </figure>
+    </section>
+
+    <section class="band wrap" id="returns" aria-labelledby="returns-h">
+      <div class="band__label"><p class="eyebrow rv">§02</p></div>
+      <div class="band__main">
+        <h2 id="returns-h" class="h2 rv">Your agent sends the diff, reads the findings, <em>fixes, and calls again.</em></h2>
+        <p class="lede rv" style="--i:1">Each pass is one review. What comes back is four fields, not a conversation: only what breaks, with the fix. No style nits. When the list comes back empty, the loop is done.</p>
+        <div class="anatomy">
+          <ol class="anatomy__parts">
+            <li class="rv" style="--i:0"><span class="meta">file</span><p>The path, exactly as it appears in the diff.</p></li>
+            <li class="rv" style="--i:1"><span class="meta">line</span><p>The new-side line number. Not a range, not a hunk.</p></li>
+            <li class="rv" style="--i:2"><span class="meta">breaks</span><p>One sentence on the behaviour that is now wrong. No style nits, no praise.</p></li>
+            <li class="rv" style="--i:3"><span class="meta">fix</span><p>One line you could paste. If it needs more than a line, it says so.</p></li>
+          </ol>
+          <div class="code rv" style="--i:2">
+            <div class="code__bar"><span>GET /v1/runs/:id</span><span>shape only, values illustrative</span></div>
+<pre><code>{
+  <span class="k">"status"</span>: <span class="s">"done"</span>,
+  <span class="k">"partial"</span>: false,
+  <span class="k">"findings"</span>: [
+    {
+      <span class="k">"file"</span>:   <span class="s">"billing/charge.py"</span>,
+      <span class="k">"line"</span>:   15,
+      <span class="k">"breaks"</span>: <span class="s">"Permission check is inverted…"</span>,
+      <span class="k">"fix"</span>:    <span class="s">"if not user.can_charge: raise …"</span>
+    }
+  ],
+  <span class="k">"cost_usd"</span>: <span class="s">"[run cost]"</span>
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band wrap" id="where" aria-labelledby="where-h">
+      <div class="band__label"><p class="eyebrow rv">§03</p></div>
+      <div class="band__main">
+        <h2 id="where-h" class="h2 rv">One call. It runs <em>wherever the diff already is.</em></h2>
+        <table class="ledger where">
+          <caption class="vh">Clients that call the same review</caption>
+          <tbody>
+            <tr class="rv"><th scope="row">Browser</th><td>Paste a diff or drop a file. The page polls the run.</td><td class="meta">source: web</td></tr>
+            <tr class="rv" style="--i:1"><th scope="row">API</th><td><code>POST /v1/reviews</code> returns a run id. Poll <code>GET /v1/runs/:id</code>.</td><td class="meta">source: api</td></tr>
+            <tr class="rv" style="--i:2"><th scope="row">CI</th><td>A GitHub Action writes findings to the job summary. It does not comment on your PR.</td><td class="meta">source: ci</td></tr>
+            <tr class="rv" style="--i:3"><th scope="row">Your agent</th><td>Your agent posts its own diff before it opens the PR. A retry is another review.</td><td class="meta">source: agent</td></tr>
+          </tbody>
+        </table>
+        <div class="code rv">
+          <div class="code__bar"><span>from an agent</span><span>bash</span></div>
+<pre><code>curl -s -H <span class="s">"Authorization: Bearer $REVIEW_GRADE_KEY"</span> \
+  https://api.reviewgrade.dev/v1/reviews \
+  -d <span class="s">'{"diff":"...","source":"agent"}'</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="band wrap" id="price" aria-labelledby="price-h">
+      <div class="band__label"><p class="eyebrow rv">§04</p></div>
+      <div class="band__main">
+        <h2 id="price-h" class="h2 rv">You pay per review. <em>A failed one is free.</em></h2>
+        <p class="meta rv">Planned pricing. Nothing is on sale yet.</p>
+        <div class="tiers">
+          <article class="tier rv" style="--i:0" aria-labelledby="t-free">
+            <h3 id="t-free" class="tier__name">Trial</h3>
+            <p class="tier__price"><span class="tier__amt">$0</span><span class="tier__unit">once</span></p>
+            <p class="tier__for">For trying it on a day of real pull requests.</p>
+            <a class="btn tier__cta" href="#notyet">Get notified <span class="arr" aria-hidden="true">→</span></a>
+            <ul class="tier__list">
+              <li>20 reviews, once per email</li>
+              <li>Browser, API, CI and agent</li>
+              <li>Findings: file, line, what breaks, fix</li>
+              <li>A failed review spends nothing</li>
+            </ul>
+          </article>
+          <article class="tier tier--rec rv" style="--i:1" aria-labelledby="t-month">
+            <span class="tag tag--mark tier__flag">Recommended</span>
+            <h3 id="t-month" class="tier__name">Month</h3>
+            <p class="tier__price"><span class="tier__amt">$25</span><span class="tier__unit">per month</span></p>
+            <p class="tier__for">For a team or pipeline reviewing every pull request.</p>
+            <a class="btn btn--mark tier__cta" href="#notyet">Join the early list <span class="arr" aria-hidden="true">→</span></a>
+            <ul class="tier__list">
+              <li>250 reviews, $0.10 each</li>
+              <li>API keys for CI and your agent</li>
+              <li>GitHub Action writes the job summary</li>
+              <li>Unused reviews end with the month</li>
+              <li>A failed review spends nothing</li>
+            </ul>
+          </article>
+          <article class="tier rv" style="--i:2" aria-labelledby="t-usage">
+            <h3 id="t-usage" class="tier__name">Usage</h3>
+            <p class="tier__price"><span class="tier__amt">$0.15</span><span class="tier__unit">per review</span></p>
+            <p class="tier__for">On top of the Month, for busy weeks past 250.</p>
+            <a class="btn tier__cta" href="#notyet">Get notified <span class="arr" aria-hidden="true">→</span></a>
+            <ul class="tier__list">
+              <li>Same balance, same keys</li>
+              <li>Stops at a monthly cap you set</li>
+              <li>Cap starts at $50</li>
+              <li>Billed only when a review finishes</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="band wrap" id="notyet" aria-labelledby="notyet-h">
+      <div class="band__label"><p class="eyebrow rv">§05</p></div>
+      <div class="band__main">
+        <h2 id="notyet-h" class="h2 rv">It is <em>not for sale</em> until it catches the bugs we already know about.</h2>
+        <div class="gate">
+          <p class="rv">Before we take money, the reviewer runs against a private set of pull requests with known, planted defects. It never sees the answer key. A separate matcher counts what it caught.</p>
+          <p class="rv" style="--i:1">The ship line is 85% of planted defects caught. It has not reached that line yet. If a later model or prompt drops it below 70%, we stop selling.</p>
+          <div class="gate__meter rv" style="--i:2" role="img" aria-label="Ship line at 85 percent; current recall not published">
+            <div class="gate__scale"><span style="left:70%">70 stop</span><span style="left:85%">85 ship</span></div>
+            <div class="gate__track"><i class="gate__line gate__line--stop" style="left:70%"></i><i class="gate__line gate__line--ship" style="left:85%"></i></div>
+            <p class="gate__now"><span class="tag tag--todo">placeholder</span> Current recall: [publish when measured] · last run [date]</p>
+          </div>
+          <form class="gate__form rv" style="--i:3" action="#" onsubmit="return false">
+            <div class="field">
+              <label for="email">Email for launch</label>
+              <input class="input" id="email" type="email" autocomplete="email" placeholder="you@company.dev" required>
+              <span class="hint">[Placeholder form, not wired to anything yet.]</span>
+            </div>
+            <button class="btn btn--mark" type="submit">Tell me when it ships <span class="arr" aria-hidden="true">→</span></button>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot wrap">
+    <span class="mark"><span class="mark__sq" aria-hidden="true"></span>review<span>/</span>grade</span>
+    <span class="meta">No chat. No GitHub App. No score on your diff.</span>
+    <a class="link meta" href="system.html">Design system</a>
+  </footer>
+  <script src="home.js" defer></script>
+</body>
+</html>

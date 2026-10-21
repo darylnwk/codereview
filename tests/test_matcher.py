@@ -7,6 +7,7 @@ import unittest
 from review_grade.matcher import (
     catches,
     describes,
+    diff_new_lines,
     files_match,
     kill_gate,
     line_in_span,
@@ -15,6 +16,16 @@ from review_grade.matcher import (
 from review_grade.rubric import load_prefix
 from review_grade.stress import format_summary, load_subset, run_stress
 from review_grade.subset import default_jsonl, load_rows, select_subset
+
+
+def _line_in_diff(diff: str, issue: dict) -> int:
+    """An in-span line the diff shows, or the span start when none does."""
+    for path, numbers in diff_new_lines(diff).items():
+        if files_match(issue["file_path"], path):
+            for number in range(int(issue["start_line"]), int(issue["end_line"]) + 1):
+                if number in numbers:
+                    return number
+    return int(issue["start_line"])
 
 
 def _finding(issue: dict, **overrides: object) -> dict[str, object]:
@@ -164,7 +175,12 @@ class StressScheduleTests(unittest.TestCase):
         def review_all(prompt: str) -> dict:
             calls["n"] += 1
             item = by_prompt[prompt]
-            return {"findings": [_finding(issue) for issue in item["issues"]]}
+            return {
+                "findings": [
+                    _finding(issue, line=_line_in_diff(item["diff"], issue))
+                    for issue in item["issues"]
+                ]
+            }
 
         shipped = run_stress(subset, review_all)
         self.assertEqual(shipped["caught"], shipped["planted"])

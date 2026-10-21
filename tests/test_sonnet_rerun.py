@@ -9,6 +9,7 @@ from review_grade.matcher import catches, line_in_span, score_findings
 from review_grade.reviewer import (
     SONNET_MODEL,
     CredentialError,
+    ProviderError,
     claude_command,
     parse_claude_stdout,
 )
@@ -119,6 +120,26 @@ class SonnetRerunTests(unittest.TestCase):
         with self.assertRaises(CredentialError) as caught:
             parse_claude_stdout(raw)
         self.assertIn("Failed to authenticate", str(caught.exception))
+
+    def test_weekly_limit_is_a_credential_error(self) -> None:
+        raw = json.dumps(
+            {
+                "is_error": True,
+                "result": (
+                    "You've hit your weekly limit · resets Oct 11 at 6pm "
+                    "(Asia/Singapore)"
+                ),
+            }
+        )
+        with self.assertRaises(CredentialError) as caught:
+            parse_claude_stdout(raw)
+        self.assertIn("weekly limit", str(caught.exception))
+
+    def test_other_model_error_stays_a_provider_error(self) -> None:
+        raw = json.dumps({"is_error": True, "result": "model overloaded"})
+        with self.assertRaises(ProviderError) as caught:
+            parse_claude_stdout(raw)
+        self.assertNotIsInstance(caught.exception, CredentialError)
 
     def test_structured_output_is_the_findings_object(self) -> None:
         raw = json.dumps(

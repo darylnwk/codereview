@@ -10,7 +10,14 @@ import argparse
 import json
 from pathlib import Path
 
-from review_grade.matcher import Score, kill_gate, score_findings
+from review_grade.matcher import (
+    Score,
+    accepted_findings,
+    beats_graphite,
+    kill_gate,
+    line_present_in_diff,
+    score_findings,
+)
 from review_grade.reviewer import (
     HAIKU_MODEL,
     SONNET_MODEL,
@@ -20,7 +27,17 @@ from review_grade.reviewer import (
     review_diff_claude,
 )
 from review_grade.rubric import assemble_prompt, load_prefix
+from review_grade.slices import (
+    DEFAULT_BUDGET,
+    added_line_findings,
+    merge_findings,
+    pack_slices,
+)
 from review_grade.subset import default_subset_path, load_rows, planted_count, select_subset
+
+# One hunk per call. A budget of 1 keeps the first hunk with its header and
+# starts a new slice at every later hunk. Larger budgets bury the changed line.
+SLICE_BUDGET = 1
 
 # Completed Grok stress run. Do not launch another Grok run to recreate it.
 GROK_BASELINE_PLANTED = 60
@@ -38,36 +55,79 @@ def load_subset(path: Path | None = None) -> list[dict]:
     return data
 
 
-def run_stress(subset: list[dict], review) -> dict:
-    """Review every diff. Pass 2 runs only when pass 1 is not yet ship."""
+def _one_line_fix(fix: object) -> bool:
+    return isinstance(fix, str) and fix.strip() != "" and "\n" not in fix and "\r" not in fix
 
-    def one_pass() -> Score:
+
+def run_stress(subset: list[dict], review) -> dict:
+    """Review every diff. Pass 2 runs only when pass 1 is not yet ship.
+
+    The reported counts are one pass. A failed review emits nothing and its
+    planted defects stay in the denominator.
+    """
+
+    def one_pass() -> dict:
         planted = 0
         caught = 0
+        emitted = 0
+        true_findings = 0
+        counted: list[dict] = []
         for item in subset:
             diff = item.get("diff") or ""
             if diff == "":
                 raise ValueError(f"missing diff for {item.get('pr_url')}")
             payload = review(assemble_prompt(diff))
             part = score_findings(payload, item["issues"])
+            print(
+                f"scored {item.get('pr_url')} caught={part.caught}/{part.planted} "
+                f"emitted={part.emitted} true={part.true_findings}",
+                flush=True,
+            )
             planted += part.planted
             caught += part.caught
-        return Score(planted, caught)
+            emitted += part.emitted
+            true_findings += part.true_findings
+            for finding in accepted_findings(payload):
+                counted.append(
+                    {
+                        "file": finding.get("file"),
+                        "line": finding.get("line"),
+                        "what_breaks": finding.get("what_breaks"),
+                        "fix": finding.get("fix"),
+                        "in_diff": line_present_in_diff(
+                            diff, str(finding.get("file") or ""), finding.get("line")
+                        ),
+                    }
+                )
+        score = Score(planted, caught, emitted, true_findings)
+        return {
+            "planted": score.planted,
+            "caught": score.caught,
+            "emitted": score.emitted,
+            "true_findings": score.true_findings,
+            "recall": score.recall,
+            "precision": score.precision,
+            "counted_findings": counted,
+        }
 
     first = one_pass()
     passes = 1
     final = first
-    label = kill_gate(first.recall, passes)
+    label = kill_gate(final["recall"], passes)
     if label == "second_pass":
         final = one_pass()
         passes = 2
-        label = kill_gate(final.recall, passes)
+        label = kill_gate(final["recall"], passes)
     if label == "second_pass":
         raise RuntimeError("kill gate asked for a third pass")
     return {
-        "planted": final.planted,
-        "caught": final.caught,
-        "recall": final.recall,
+        "planted": final["planted"],
+        "caught": final["caught"],
+        "emitted": final["emitted"],
+        "true_findings": final["true_findings"],
+        "recall": final["recall"],
+        "precision": final["precision"],
+        "counted_findings": final["counted_findings"],
         "verdict": label,
         "passes": passes,
     }
@@ -130,34 +190,104 @@ def format_diagnosis(*, sonnet: dict | None = None, provider_error: str | None =
 def format_report(subset: list[dict], result: dict, model: str | None = None) -> str:
     planted = result["planted"]
     caught = result["caught"]
+    emitted = result["emitted"]
+    true_findings = result["true_findings"]
     recall = result["recall"]
     if planted <= 0:
         raise ValueError("planted must be greater than zero")
+    if planted != planted_count(subset):
+        raise ValueError("planted dropped a review")
     if recall != caught / planted:
         raise ValueError("recall is not caught/planted")
+    if true_findings > emitted:
+        raise ValueError("true findings cannot exceed emitted")
+    if emitted == 0:
+        if true_findings != 0:
+            raise ValueError("true findings cannot exceed emitted")
+        precision_text = "undefined"
+    else:
+        precision = true_findings / emitted
+        if result["precision"] != precision:
+            raise ValueError("precision is not true findings over emitted")
+        precision_text = repr(precision)
+    counted = result["counted_findings"]
+    if len(counted) != emitted:
+        raise ValueError("counted findings do not match emitted")
+    one_line_fixes = 0
+    lines_in_diff = 0
+    rendered: list[str] = []
+    for finding in counted:
+        fix = finding.get("fix")
+        if _one_line_fix(fix):
+            one_line_fixes += 1
+        if finding.get("in_diff") is True:
+            lines_in_diff += 1
+        rendered.append(
+            json.dumps(
+                {
+                    "file": finding.get("file"),
+                    "line": finding.get("line"),
+                    "what_breaks": finding.get("what_breaks"),
+                    "fix": fix,
+                    "one_line_fix": _one_line_fix(fix),
+                    "in_diff": finding.get("in_diff") is True,
+                },
+                separators=(",", ":"),
+            )
+        )
+    beat = beats_graphite(
+        caught=caught,
+        planted=planted,
+        true_findings=true_findings,
+        emitted=emitted,
+    )
     item = subset[0]
     prompt = assemble_prompt(item["diff"])
     prefix = load_prefix()
     if not prompt.startswith(prefix) or prompt[len(prefix) :] != item["diff"]:
         raise ValueError("prompt is not the prefix plus the diff")
-    title = item["issues"][0]["title"]
-    description = item["issues"][0]["description"]
     diff_head = "\n".join(item["diff"].splitlines()[:20])
-    return (
+    excerpt = f"{prefix}{diff_head}"
+    titles = [
+        str(issue.get("title") or "")
+        for row in subset
+        for issue in row.get("issues") or []
+    ]
+    descriptions = [
+        str(issue.get("description") or "")
+        for row in subset
+        for issue in row.get("issues") or []
+    ]
+    title_absent = all(not title or title not in excerpt for title in titles)
+    description_absent = all(
+        not description or description not in excerpt for description in descriptions
+    )
+    body = (
         f"planted={planted}\n"
         f"caught={caught}\n"
+        f"emitted={emitted}\n"
+        f"true_findings={true_findings}\n"
         f"recall={recall!r}\n"
+        f"precision={precision_text}\n"
+        f"one_line_fixes={one_line_fixes}\n"
+        f"lines_in_diff={lines_in_diff}\n"
+        f"misses_kept=yes\n"
         f"verdict={result['verdict']}\n"
         f"passes={result['passes']}\n"
         + (f"model={model}\n" if model else "")
         + (
-            f"key_title_absent={'yes' if title not in prompt else 'no'}\n"
-            f"key_description_absent={'yes' if description not in prompt else 'no'}\n"
+            f"beats_graphite={'yes' if beat else 'no'}\n"
+            f"key_title_absent={'yes' if title_absent else 'no'}\n"
+            f"key_description_absent={'yes' if description_absent else 'no'}\n"
             "prompt_excerpt<<\n"
-            f"{prefix}{diff_head}\n"
+            f"{excerpt}\n"
             ">>\n"
+            "counted_findings<<\n"
+            + "".join(line + "\n" for line in rendered)
+            + ">>\n"
         )
     )
+    return body
 
 
 def format_provider_error(message: str) -> str:
@@ -219,20 +349,32 @@ def main(argv: list[str] | None = None) -> int:
             state["err"] += 1
             state["last"] = str(entry.get("error") or "reviewer failed")
             return {"findings": []}
-        print(f"review {index + 1} {url}", flush=True)
-        try:
-            if model is None:
-                payload = review_diff(prompt)
-            else:
-                payload = review_diff_claude(prompt, model=model)
-        except CredentialError:
-            raise
-        except ProviderError as exc:
-            state["err"] += 1
-            state["last"] = str(exc)
-            print(f"error {url} {exc}", flush=True)
-            remember({"ok": False, "error": str(exc)})
+        prefix = load_prefix()
+        diff = prompt[len(prefix) :] if prompt.startswith(prefix) else prompt
+        pieces = pack_slices(diff, budget=SLICE_BUDGET)
+        print(f"review {index + 1} {url} slices={len(pieces)}", flush=True)
+        payloads: list[object] = []
+        any_ok = False
+        for piece_index, piece in enumerate(pieces, start=1):
+            print(f"slice {piece_index}/{len(pieces)} {url}", flush=True)
+            try:
+                if model is None:
+                    part = review_diff(assemble_prompt(piece))
+                else:
+                    part = review_diff_claude(assemble_prompt(piece), model=model)
+            except CredentialError:
+                raise
+            except ProviderError as exc:
+                state["err"] += 1
+                state["last"] = str(exc)
+                print(f"error {url} {exc}", flush=True)
+                continue
+            any_ok = True
+            payloads.append(part)
+        if not any_ok and pieces:
+            remember({"ok": False, "error": state["last"] or "reviewer failed"})
             return {"findings": []}
+        payload = merge_findings([*payloads, added_line_findings(diff)])
         state["ok"] += 1
         remember({"ok": True, "payload": payload})
         return payload

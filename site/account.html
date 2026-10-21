@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account, Review grade</title>
+  <meta name="description" content="Credits left, the cap, the runs that spent them, and the keys that spend them.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%2312110f' width='32' height='32'/%3E%3Crect x='6' y='13' width='20' height='7' fill='%23d9f24a'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=Schibsted+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="account-v2.css">
+  <script>document.documentElement.classList.remove('no-js')</script>
+</head>
+<body class="acct">
+  <a class="skip" href="#balance">Skip to the balance</a>
+  <header class="top wrap">
+    <a class="mark" href="index.html" aria-label="Review grade, home"><span class="mark__sq" aria-hidden="true"></span>review<span>/</span>grade</a>
+    <div class="who">
+      <span class="meta">Signed in as</span> <span id="email" class="who__email">ada@example.com</span>
+      <button class="btn btn--quiet link" type="button" id="sign-out">Sign out</button>
+    </div>
+  </header>
+
+  <main class="wrap acct__main">
+    <p class="example rv"><span class="tag tag--todo">example data</span> Every number, run and key on this page is made up. Nothing here calls the API.</p>
+    <p class="hint rv" id="signout-note" hidden>Sign-out is a magic-link session; this demo page has no session to end.</p>
+
+    <!-- Balance -->
+    <section id="balance" class="acct__band" aria-labelledby="bal-h">
+      <div class="band__label"><p class="eyebrow rv">§01</p></div>
+      <div class="bal">
+        <div class="bal__hero rv">
+          <h1 id="bal-h" class="vh">Balance</h1>
+          <p class="bal__num"><span id="left" class="count">214</span><span class="bal__unit">reviews left</span></p>
+          <p class="bal__plan"><span class="tag tag--mark" id="plan-tag">Month</span> <span id="plan-line">$25 for 250 reviews, $0.10 each. Then $0.15 a review.</span></p>
+          <p class="hint">Unused reviews end with the month. A failed review spends nothing.</p>
+        </div>
+
+        <div class="usage rv" style="--i:1">
+          <div class="usage__row"><span class="meta">This month</span><span class="usage__val"><b id="used">36</b> of <span id="included">250</span> used</span></div>
+          <div class="meterbar" aria-hidden="true"><i id="used-bar"></i></div>
+          <p class="hint" id="used-line">36 of 250 are finished. Unused reviews end with the month.</p>
+
+          <div class="usage__row"><span class="meta">Spend so far</span><span class="usage__val" id="spend">$25.00</span></div>
+          <p class="hint" id="spend-line">$25.00 for the month, plus $0.00 over 250.</p>
+
+          <form id="cap-form" class="cap">
+            <label for="cap" class="meta">Monthly cap on extra reviews</label>
+            <div class="cap__ctl"><span class="cap__sym" aria-hidden="true">$</span><input id="cap" class="input" name="cap" inputmode="numeric" autocomplete="off" value="50" aria-describedby="cap-line"><span class="hint">dollars</span></div>
+            <p class="hint" id="cap-line">After 250 reviews, each one is $0.15 until the extra charge reaches $50.</p>
+            <p class="hint cap__err" id="cap-note" role="status" hidden></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ledger -->
+    <section id="ledger" class="acct__band" aria-labelledby="led-h">
+      <div class="band__label"><p class="eyebrow rv">§02</p></div>
+      <div>
+        <h2 id="led-h" class="h2 rv">Ledger</h2>
+        <p class="hint rv">Recent runs. A credit is spent only when a run is <b>done</b>. Failed runs cost nothing.</p>
+        <table class="runs rv" style="--i:1">
+          <caption class="vh">Recent runs, example data</caption>
+          <thead><tr><th scope="col">Run</th><th scope="col">Source</th><th scope="col">Status</th><th scope="col">When</th><th scope="col" class="r">Cost</th></tr></thead>
+          <tbody id="runs"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Keys -->
+    <section id="keys" class="acct__band" aria-labelledby="keys-h">
+      <div class="band__label"><p class="eyebrow rv">§03</p></div>
+      <div>
+        <h2 id="keys-h" class="h2 rv">API keys</h2>
+        <p class="hint rv">The site, the API, CI and your agent spend the same balance. A secret is shown once; we keep only a hash.</p>
+        <table class="runs keys rv" style="--i:1">
+          <caption class="vh">API keys</caption>
+          <thead><tr><th scope="col">Name</th><th scope="col">Prefix</th><th scope="col">Last used</th><th scope="col" class="r"><span class="vh">Action</span></th></tr></thead>
+          <tbody id="key-list"></tbody>
+        </table>
+        <form id="key-form" class="keyform rv" style="--i:2">
+          <div class="field"><label for="key-name">New key name</label><input class="input" id="key-name" name="name" autocomplete="off" maxlength="40" placeholder="ci, agent…"></div>
+          <button class="btn btn--mark" type="submit">Create key <span class="arr" aria-hidden="true">→</span></button>
+        </form>
+        <p id="key-note" class="hint cap__err" role="status" hidden></p>
+        <div class="secret" id="secret" hidden>
+          <p class="secret__head"><span class="tag tag--breaks">shown once</span> Copy this secret now. This page will not show it again.</p>
+          <div class="secret__row">
+            <pre><code id="secret-value"></code></pre>
+            <button class="btn" type="button" id="secret-copy"><span id="copy-label">Copy</span></button>
+          </div>
+          <p class="hint" id="copy-note" role="status" aria-live="polite"></p>
+          <button class="btn btn--quiet link" id="secret-hide" type="button">I've stored it, hide secret</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Billing -->
+    <section id="billing" class="acct__band" aria-labelledby="bill-h">
+      <div class="band__label"><p class="eyebrow rv">§04</p></div>
+      <div>
+        <h2 id="bill-h" class="h2 rv">Billing</h2>
+        <div class="bill rv" style="--i:1">
+          <div>
+            <p id="bill-line">Month plan, $25 for 250 reviews. Renews [renewal date]. Payment and invoices are handled by Stripe.</p>
+            <p class="hint">Customer [Stripe customer id]</p>
+          </div>
+          <div class="bill__cta">
+            <a class="btn btn--mark" id="upgrade" href="#" hidden>Upgrade to Month, $25 <span class="arr" aria-hidden="true">→</span></a>
+            <a class="btn" id="manage" href="#">Manage billing on Stripe <span class="arr" aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <p class="hint rv">[Placeholder links: Stripe Checkout and Customer Portal URLs are not wired.] <button class="btn btn--quiet link" type="button" id="plan-toggle">Preview as Trial</button></p>
+      </div>
+    </section>
+  </main>
+  <footer class="foot wrap"><span class="meta">No dashboard. No leaderboard. No score on your diff.</span><a class="link meta" href="index.html">Home</a></footer>
+  <script src="account.js"></script>
+</body>
+</html>
