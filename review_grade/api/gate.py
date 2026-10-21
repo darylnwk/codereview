@@ -17,6 +17,7 @@ _REFUSALS = {
     "bad_request": (400, "The review request is not valid."),
     "unauthorized": (401, "The API key is not valid."),
     "no_credit": (402, "The account has no credits."),
+    "cap_reached": (402, "The monthly cap on extra reviews is reached."),
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),

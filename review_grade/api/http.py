@@ -22,6 +22,7 @@ from review_grade.api.gate import (
     decide,
     refuse,
 )
+from review_grade.api.plans import allow_next_review, get_plan
 from review_grade.api.store import Store, format_time
 
 
@@ -115,6 +116,11 @@ def accept_review(
         if isinstance(decision, Accepted) and key is not None:
             if price_cap and over_cap(decision.kept_diff):
                 denied = refuse("too_expensive")
+                return denied.status, _error_body(denied)
+            billing = store.billing(key.user_id)
+            plan = get_plan(billing.plan)
+            if not allow_next_review(plan, billing.reviews_finished, billing.monthly_cap_usd):
+                denied = refuse("cap_reached")
                 return denied.status, _error_body(denied)
             pending = None
             if decision.omitted is not None:
