@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 import secrets
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from review_grade.api.cost import project_cost
-from review_grade.api.review_cost import AttemptUsage, record_review_cost
+from review_grade.api.review_cost import AttemptUsage, record_review_cost, unknown_usage
 from review_grade.api.store import Store
 from review_grade.findings import check_findings
 from review_grade.reviewer import REVIEWER_MODEL, ProviderError
+
+logger = logging.getLogger("review_grade.api.worker")
 
 _STALE_AFTER = timedelta(minutes=3)
 _POLL_SECONDS = 0.02
@@ -94,57 +98,78 @@ def settle_one(store: Store, review) -> bool:
         store.mark_failed(run_id, token)
         charged = False
         if not usages:
-            usages.append(
-                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
-            )
-    if usages:
+            usages.append(unknown_usage(REVIEWER_MODEL))
+    _record_settle_cost(store, run_id=run_id, account=user_id, usages=usages, charged=charged)
+    return True
+
+
+def _record_settle_cost(
+    store: Store,
+    *,
+    run_id: str,
+    account: int,
+    usages: list[AttemptUsage],
+    charged: bool,
+) -> None:
+    """Persist cost after settlement. Recording failures must not undo the settle."""
+    if not usages:
+        usages.append(unknown_usage(REVIEWER_MODEL))
+    try:
         record_review_cost(
             store,
             run_id=run_id,
-            account=user_id,
+            account=account,
             usages=usages,
             charged=charged,
         )
-    return True
+    except Exception:
+        logger.exception("review_cost recording failed run_id=%s", run_id)
 
 
 def _judge(row, review, usages: list[AttemptUsage]) -> _Done | None:
     if _expired(str(row["created_at"]), datetime.now(timezone.utc)):
+        usages.append(unknown_usage(REVIEWER_MODEL))
         return None
     diff = row["diff_text"]
     if not isinstance(diff, str):
+        usages.append(unknown_usage(REVIEWER_MODEL))
         return None
     try:
         payload = _call_review(review, diff, usages)
     except ProviderError:
         if not usages:
-            usages.append(
-                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
-            )
+            usages.append(unknown_usage(REVIEWER_MODEL))
         return None
     findings = _as_findings(payload)
     if findings is None:
         if not usages:
-            usages.append(
-                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
-            )
+            usages.append(unknown_usage(REVIEWER_MODEL))
         return None
     if not usages:
-        usages.append(
-            AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
-        )
+        usages.append(unknown_usage(REVIEWER_MODEL))
     pending = row["omitted_pending"]
     if pending is None:
         return _Done(findings, project_cost(diff), False, None)
     return _Done(findings, project_cost(diff), True, str(pending))
 
 
-def _call_review(review, diff: str, usages: list[AttemptUsage]):
-    """Prefer reviewers that accept attempt_usages; fixtures take only the diff."""
+def _accepts_attempt_usages(review) -> bool:
     try:
+        params = inspect.signature(review).parameters
+    except (TypeError, ValueError):
+        return False
+    if "attempt_usages" in params:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in params.values()
+    )
+
+
+def _call_review(review, diff: str, usages: list[AttemptUsage]):
+    """Call once. Inspect the signature so fixtures are not invoked twice."""
+    if _accepts_attempt_usages(review):
         return review(diff, attempt_usages=usages)
-    except TypeError:
-        return review(diff)
+    return review(diff)
 
 
 def _expired(created_at: str, now: datetime) -> bool:

@@ -77,10 +77,11 @@ CREATE TABLE IF NOT EXISTS review_costs (
     run_id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
     attempts_json TEXT NOT NULL,
-    total_cost_usd REAL NOT NULL,
+    total_cost_usd REAL,
     charged INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS review_costs_user_id ON review_costs(user_id);
 """
 
 
@@ -333,6 +334,7 @@ class Store:
 
     def save_review_cost(self, record) -> None:
         """Store internal provider cost for one review. Not exposed on GET /v1/runs."""
+        total = record.total_cost_usd
         with self.transaction():
             self._conn.execute(
                 """
@@ -356,11 +358,13 @@ class Store:
                                 "input_tokens": attempt.input_tokens,
                                 "output_tokens": attempt.output_tokens,
                                 "cost_usd": attempt.cost_usd,
+                                "usage_known": attempt.usage_known,
+                                "priced": attempt.priced,
                             }
                             for attempt in record.attempts
                         ]
                     ),
-                    float(record.total_cost_usd),
+                    None if total is None else float(total),
                     1 if record.charged else 0,
                     format_time(datetime.now(timezone.utc)),
                 ),
@@ -378,11 +382,12 @@ class Store:
             ).fetchone()
             if row is None:
                 return None
+            total = row["total_cost_usd"]
             return {
                 "run_id": str(row["run_id"]),
                 "account": int(row["user_id"]),
                 "attempts": json.loads(row["attempts_json"]),
-                "total_cost_usd": float(row["total_cost_usd"]),
+                "total_cost_usd": None if total is None else float(total),
                 "charged": bool(row["charged"]),
             }
 

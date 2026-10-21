@@ -3,6 +3,9 @@
 Customer-facing run.cost_usd stays the projected line price. This module
 records what the provider call actually cost us: every attempt (including
 retries and failed runs we absorb), whether the customer was charged.
+
+Unknown usage or unpriced rates store NULL tokens/cost with explicit flags.
+A real zero token count or zero dollar cost stays distinguishable from unknown.
 """
 
 from __future__ import annotations
@@ -24,16 +27,41 @@ _TOKENS_PER_MTOK = 1_000_000
 @dataclass(frozen=True)
 class AttemptUsage:
     model: str
-    input_tokens: int
-    output_tokens: int
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    usage_known: bool = False
+
+
+def unknown_usage(model: str) -> AttemptUsage:
+    """Failure before a usage envelope, non-JSON reply, or missing usage."""
+    return AttemptUsage(
+        model=model,
+        input_tokens=None,
+        output_tokens=None,
+        usage_known=False,
+    )
+
+
+def known_usage(model: str, *, input_tokens: int, output_tokens: int) -> AttemptUsage:
+    """Provider reported token counts (including a real zero)."""
+    if input_tokens < 0 or output_tokens < 0:
+        raise ValueError("token counts must be non-negative")
+    return AttemptUsage(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        usage_known=True,
+    )
 
 
 @dataclass(frozen=True)
 class AttemptCost:
     model: str
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
+    input_tokens: int | None
+    output_tokens: int | None
+    cost_usd: float | None
+    usage_known: bool
+    priced: bool
 
 
 @dataclass(frozen=True)
@@ -43,7 +71,7 @@ class ReviewCostRecord:
     run_id: str
     account: int
     attempts: tuple[AttemptCost, ...]
-    total_cost_usd: float
+    total_cost_usd: float | None
     charged: bool
 
 
@@ -67,42 +95,68 @@ def build_attempt(
     *,
     pricing: dict[str, ModelRates] | None = None,
 ) -> AttemptCost:
-    """Price one attempt from the pricing map.
-
-    TODO placeholder rates (None) yield cost_usd 0.0 so the attempt is still
-    recorded. Callers that need real dollars must fill MODEL_PRICING first.
-    """
+    """Price one attempt. Unknown model/rates or unknown usage → NULL cost."""
+    if not usage.usage_known:
+        return AttemptCost(
+            model=usage.model,
+            input_tokens=None,
+            output_tokens=None,
+            cost_usd=None,
+            usage_known=False,
+            priced=False,
+        )
     rates = rates_for(usage.model, pricing)
     if rates is None:
-        raise KeyError(f"no pricing entry for model {usage.model!r}")
+        logger.warning("model_pricing missing for %s; attempt unpriced", usage.model)
+        return AttemptCost(
+            model=usage.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=None,
+            usage_known=True,
+            priced=False,
+        )
     input_rate = rates["input_usd_per_mtok"]
     output_rate = rates["output_usd_per_mtok"]
     if input_rate is None or output_rate is None:
         logger.warning(
-            "model_pricing placeholder for %s (%s); attempt cost stored as 0.0",
+            "model_pricing placeholder for %s (%s); attempt unpriced",
             usage.model,
             rates["source"],
         )
-        cost = 0.0
-    else:
-        cost = attempt_cost_usd(
+        return AttemptCost(
+            model=usage.model,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
-            input_usd_per_mtok=input_rate,
-            output_usd_per_mtok=output_rate,
+            cost_usd=None,
+            usage_known=True,
+            priced=False,
         )
+    assert usage.input_tokens is not None and usage.output_tokens is not None
     return AttemptCost(
         model=usage.model,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
-        cost_usd=cost,
+        cost_usd=attempt_cost_usd(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            input_usd_per_mtok=input_rate,
+            output_usd_per_mtok=output_rate,
+        ),
+        usage_known=True,
+        priced=True,
     )
 
 
-def total_attempt_cost(attempts: list[AttemptCost] | tuple[AttemptCost, ...]) -> float:
-    """Sum every attempt. A retry must increase this; dropping attempts fails callers."""
+def total_attempt_cost(
+    attempts: list[AttemptCost] | tuple[AttemptCost, ...],
+) -> float | None:
+    """Sum every priced attempt. NULL if any attempt is unknown or unpriced."""
+    if any(not attempt.priced or not attempt.usage_known for attempt in attempts):
+        return None
     total = 0.0
     for attempt in attempts:
+        assert attempt.cost_usd is not None
         total = total + attempt.cost_usd
     return total
 
@@ -134,6 +188,8 @@ def log_review_cost(record: ReviewCostRecord) -> None:
             "input_tokens": attempt.input_tokens,
             "output_tokens": attempt.output_tokens,
             "cost_usd": attempt.cost_usd,
+            "usage_known": attempt.usage_known,
+            "priced": attempt.priced,
         }
         for attempt in record.attempts
     ]
