@@ -20,6 +20,7 @@ _REFUSALS = {
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),
+    "too_expensive": (413, "The review would cost more than $0.15."),
     "rate_limited": (429, "Too many reviews were accepted in the last minute."),
 }
 
@@ -52,6 +53,7 @@ class Accepted:
     kept_diff: str
     diff_hash: str
     source: str
+    omitted: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,7 @@ def _decide_post(op: PostOp) -> Decision:
         return sized
     if op.accepts_in_window >= ACCEPT_LIMIT:
         return refuse("rate_limited")
-    return Accepted(202, kept, digest, source)
+    return Accepted(202, kept, digest, source, _omitted_paths(raw, files))
 
 
 def _parse_payload(
@@ -161,7 +163,7 @@ def _parse_payload(
 
 def _size(diff: str) -> Refused | None:
     paths = _paths(diff)
-    count = _changed_line_count(diff)
+    count = changed_line_count(diff)
     generated_only = bool(paths) and all(_generated(path) for path in paths)
     if generated_only and count < _LINE_CAP:
         return refuse("too_large")
@@ -172,7 +174,7 @@ def _size(diff: str) -> Refused | None:
     return refuse("too_large")
 
 
-def _changed_line_count(diff: str) -> int:
+def changed_line_count(diff: str) -> int:
     count = 0
     for line in diff.splitlines():
         if line.startswith("+++") or line.startswith("---"):
@@ -180,6 +182,13 @@ def _changed_line_count(diff: str) -> int:
         if line.startswith("+") or line.startswith("-"):
             count += 1
     return count
+
+
+def _omitted_paths(diff: str, files: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    if files is None:
+        return None
+    wanted = set(files)
+    return tuple(path for path in _paths(diff) if path not in wanted)
 
 
 def _select(diff: str, files: tuple[str, ...] | None) -> str:

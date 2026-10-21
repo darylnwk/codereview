@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote, urlsplit
 
+from review_grade.api.cost import over_cap
 from review_grade.api.gate import (
     WINDOW_SECONDS,
     Accepted,
@@ -19,6 +20,7 @@ from review_grade.api.gate import (
     ShowCredits,
     ShowRun,
     decide,
+    refuse,
 )
 from review_grade.api.store import Store, format_time
 
@@ -57,10 +59,17 @@ def _handler(store: Store):
             raw = _read_body(self)
             path = urlsplit(self.path).path
             token = _bearer(self.headers.get("Authorization"))
+            price_cap = bool(getattr(self.server, "price_cap", False))
             if path != "/v1/reviews":
                 status, body = read_run(store, token, None)
             else:
-                status, body = accept_review(store, token, _idempotency(self), raw)
+                status, body = accept_review(
+                    store,
+                    token,
+                    _idempotency(self),
+                    raw,
+                    price_cap=price_cap,
+                )
             _send(self, status, body)
 
         def log_message(self, fmt: str, *args) -> None:
@@ -74,6 +83,8 @@ def accept_review(
     token: str | None,
     idempotency_key: str | None,
     raw: bytes | None,
+    *,
+    price_cap: bool = False,
 ) -> tuple[int, dict]:
     payload = _decode(raw)
     with store.transaction():
@@ -102,6 +113,12 @@ def accept_review(
             )
         )
         if isinstance(decision, Accepted) and key is not None:
+            if price_cap and over_cap(decision.kept_diff):
+                denied = refuse("too_expensive")
+                return denied.status, _error_body(denied)
+            pending = None
+            if decision.omitted is not None:
+                pending = json.dumps(list(decision.omitted))
             run_id = store.insert_queued(
                 user_id=key.user_id,
                 key_id=key.id,
@@ -109,6 +126,7 @@ def accept_review(
                 diff_text=decision.kept_diff,
                 source=decision.source,
                 idempotency_key=idempotency_key,
+                omitted_pending=pending,
             )
             return decision.status, {"run_id": run_id}
         if isinstance(decision, Replay):
