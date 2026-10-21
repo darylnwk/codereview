@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 from review_grade.api.http import bind, receive_stripe_webhook
@@ -35,7 +35,7 @@ from review_grade.api.stripe_billing import (
     sign_payload,
     verify_stripe_signature,
 )
-from review_grade.api.stripe_http import StripeClient, StripeError
+from review_grade.api.stripe_http import LiveModeRefused, StripeClient, StripeError
 
 
 _WEBHOOK_SECRET = "whsec_test_secret_for_unit_tests_only"
@@ -56,7 +56,13 @@ class FakeStripeTransport:
                 "object": "setup_intent",
                 "payment_method": "pm_test_card",
                 "status": "succeeded",
-            }
+            },
+            "seti_no_pm": {
+                "id": "seti_no_pm",
+                "object": "setup_intent",
+                "payment_method": None,
+                "status": "requires_payment_method",
+            },
         }
 
     def __call__(
@@ -206,6 +212,27 @@ class CardOnFileAnchorAndCapTests(unittest.TestCase):
         )
         self.assertEqual(self.store.billing(other).billing_anchor_day, 31)
 
+    def test_card_at_0030_utc_plus_8_anchors_previous_utc_day(self) -> None:
+        """00:30 in UTC+8 is still the previous calendar day in UTC.
+
+        Mutant that uses local ``day`` without converting to UTC would anchor 21.
+        """
+        plus8 = timezone(timedelta(hours=8))
+        card_at = datetime(2026, 10, 21, 0, 30, tzinfo=plus8)
+        self.assertEqual(card_at.astimezone(UTC), datetime(2026, 10, 20, 16, 30, tzinfo=UTC))
+        result = apply_card_on_file(
+            self.store,
+            self.user_id,
+            card_at,
+            stripe_customer_id="cus_utc8",
+        )
+        self.assertEqual(result["billing_anchor_day"], 20)
+        self.assertEqual(self.store.billing(self.user_id).billing_anchor_day, 20)
+        self.assertEqual(
+            result["trial_ends_at"],
+            "2026-11-20T00:00:00.000000Z",
+        )
+
     def test_spending_cap_stays_zero_by_default_when_card_added(self) -> None:
         self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, 0)
         self.assertEqual(self.store.billing(self.user_id).monthly_cap_cents, 0)
@@ -292,6 +319,46 @@ class WebhookSignatureAndIdempotencyTests(unittest.TestCase):
         self.assertIsNone(self.store.billing(self.user_id).card_on_file_at)
         self.assertEqual(self.transport.subscriptions, 0)
 
+    def test_stale_signature_timestamp_returns_400(self) -> None:
+        """A timestamp older than the 300s tolerance must be refused.
+
+        Mutant that drops the tolerance check would accept this event.
+        """
+        payload = _checkout_completed_event(event_id="evt_stale", user_id=self.user_id)
+        stale_ts = 1_700_000_000 - 301
+        header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=stale_ts)
+        status, body = handle_stripe_webhook(
+            self.store,
+            self.client,
+            payload=payload,
+            signature_header=header,
+            webhook_secret=_WEBHOOK_SECRET,
+            price_for_plan=_PRICES,
+            now=self.card_at,
+            signature_now=1_700_000_000,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_signature")
+        self.assertIsNone(self.store.billing(self.user_id).card_on_file_at)
+        self.assertEqual(self.transport.subscriptions, 0)
+
+    def test_setup_intent_without_payment_method_starts_no_trial(self) -> None:
+        """Missing payment_method must not record a card or create a subscription."""
+        payload = _checkout_completed_event(
+            event_id="evt_no_pm",
+            user_id=self.user_id,
+            setup_intent="seti_no_pm",
+        )
+        header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=1_700_000_000)
+        status, body = self._post(payload, header)
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("applied", False))
+        billing = self.store.billing(self.user_id)
+        self.assertIsNone(billing.card_on_file_at)
+        self.assertIsNone(billing.trial_ends_at)
+        self.assertEqual(billing.billing_anchor_day, 1)
+        self.assertEqual(self.transport.subscriptions, 0)
+
     def test_replay_is_idempotent_by_event_id(self) -> None:
         payload = _checkout_completed_event(event_id="evt_once", user_id=self.user_id)
         header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=1_700_000_000)
@@ -314,6 +381,42 @@ class WebhookSignatureAndIdempotencyTests(unittest.TestCase):
         again = self.store.billing(self.user_id, now=self.card_at)
         self.assertEqual(again.trial_ends_at, billing.trial_ends_at)
         self.assertEqual(again.stripe_subscription_id, "sub_test_1")
+
+    def test_replay_after_reopen_store_is_duplicate(self) -> None:
+        """Persisted event ids must survive close/reopen (not only in-memory).
+
+        Mutant that only dedupes in process memory would apply twice after reopen.
+        """
+        payload = _checkout_completed_event(event_id="evt_persist", user_id=self.user_id)
+        header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=1_700_000_000)
+        first, body1 = self._post(payload, header)
+        self.assertEqual(first, 200)
+        self.assertTrue(body1.get("applied"))
+        self.assertEqual(self.transport.subscriptions, 1)
+        db_path = self.tmp.name
+        self.store.close()
+        reopened = Store(db_path)
+        try:
+            second, body2 = handle_stripe_webhook(
+                reopened,
+                self.client,
+                payload=payload,
+                signature_header=header,
+                webhook_secret=_WEBHOOK_SECRET,
+                price_for_plan=_PRICES,
+                now=self.card_at,
+                signature_now=1_700_000_000,
+            )
+            self.assertEqual(second, 200)
+            self.assertTrue(body2.get("duplicate"))
+            self.assertEqual(self.transport.subscriptions, 1)
+            billing = reopened.billing(self.user_id, now=self.card_at)
+            self.assertEqual(billing.stripe_subscription_id, "sub_test_1")
+            self.assertEqual(billing.billing_anchor_day, 31)
+        finally:
+            reopened.close()
+            # tearDown also closes self.store; reopen a handle so tearDown is safe.
+            self.store = Store(db_path)
 
     def test_unknown_event_type_returns_200_with_no_effect(self) -> None:
         body = {
@@ -440,6 +543,26 @@ class EnvLoaderTests(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(loaded.price_for("developer"), "price_d")
         self.assertEqual(loaded.price_for("fleet"), "price_f")
+
+    def test_live_secret_key_refused_without_printing_value(self) -> None:
+        live = "sk_live_" + ("x" * 24)
+        full = {
+            ENV_SECRET_KEY: live,
+            ENV_WEBHOOK_SECRET: "whsec_x",
+            ENV_PRICE_DEVELOPER: "price_d",
+            ENV_PRICE_FLEET: "price_f",
+            ENV_SUCCESS_URL: "https://ok/success",
+            ENV_CANCEL_URL: "https://ok/cancel",
+        }
+        with self.assertRaises(LiveModeRefused) as ctx:
+            load_stripe_env(full)
+        message = str(ctx.exception)
+        self.assertIn("sk_live_", message)
+        self.assertIn("TEST mode", message)
+        self.assertNotIn(live, message)
+        with self.assertRaises(LiveModeRefused) as client_ctx:
+            StripeClient(live)
+        self.assertNotIn(live, str(client_ctx.exception))
 
 
 class StripeHttpFormTests(unittest.TestCase):

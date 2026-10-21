@@ -19,11 +19,10 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 from review_grade.api.plans import get_plan, trial_ends_at
 from review_grade.api.store import Store
-from review_grade.api.stripe_http import StripeClient
+from review_grade.api.stripe_http import StripeClient, refuse_live_secret_key
 
 # Env var names (values never set by this package; see docs/stripe-env.md).
 ENV_SECRET_KEY = "STRIPE_SECRET_KEY"
@@ -73,6 +72,8 @@ def load_stripe_env(environ: dict[str, str] | None = None) -> StripeEnv | None:
     values = {name: env.get(name, "").strip() for name in names}
     if any(not values[name] for name in names):
         return None
+    # Refuse live keys before constructing StripeEnv / starting the server.
+    refuse_live_secret_key(values[ENV_SECRET_KEY])
     return StripeEnv(
         secret_key=values[ENV_SECRET_KEY],
         webhook_secret=values[ENV_WEBHOOK_SECRET],

@@ -24,6 +24,22 @@ class StripeError(Exception):
         super().__init__(f"Stripe HTTP {status}: {body!r}")
 
 
+class LiveModeRefused(ValueError):
+    """Raised when a live secret key is supplied. Message never includes the key."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "STRIPE_SECRET_KEY begins with sk_live_; this API runs in TEST mode only. "
+            "Refusing to start."
+        )
+
+
+def refuse_live_secret_key(secret_key: str) -> None:
+    """Raise LiveModeRefused if ``secret_key`` is a live key. Never logs the value."""
+    if secret_key.startswith("sk_live_"):
+        raise LiveModeRefused()
+
+
 def _default_transport(
     method: str, url: str, headers: dict[str, str], body: bytes | None
 ) -> tuple[int, bytes]:
@@ -71,6 +87,7 @@ class StripeClient:
     ) -> None:
         if not secret_key:
             raise ValueError("secret_key must be non-empty")
+        refuse_live_secret_key(secret_key)
         self._secret_key = secret_key
         self._transport = transport or _default_transport
         self._base_url = base_url.rstrip("/")
