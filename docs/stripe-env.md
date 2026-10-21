@@ -6,14 +6,14 @@ Names only. Do not put secret values in this repo or in agent chat.
 
 | Name | Purpose |
 | --- | --- |
-| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_test_…`) for REST calls |
+| `STRIPE_SECRET_KEY` | Stripe TEST secret or restricted key (`sk_test_…` or `rk_test_…`) for REST calls. Live (`sk_live_` / `rk_live_`), publishable (`pk_*`), empty, and other values are refused at startup. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for `POST /v1/stripe/webhook` (`whsec_…`) |
 | `STRIPE_PRICE_DEVELOPER` | Price id for the Developer plan (`price_…`) |
 | `STRIPE_PRICE_FLEET` | Price id for the Fleet plan (`price_…`) |
 | `STRIPE_CHECKOUT_SUCCESS_URL` | Checkout `success_url` (may include `{CHECKOUT_SESSION_ID}`) |
 | `STRIPE_CHECKOUT_CANCEL_URL` | Checkout `cancel_url` |
 
-The API reads these names when present. It does not create or write them.
+The API reads these names when present. It does not create or write them. When all names are set, startup fetches each price id and refuses to start if `unit_amount`, `currency`, or `recurring.interval` disagree with `plans.py` (USD monthly).
 
 ## Stripe Dashboard objects (TEST mode)
 

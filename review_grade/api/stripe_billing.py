@@ -17,10 +17,12 @@ import hmac
 import json
 import os
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
-from review_grade.api.plans import get_plan, trial_ends_at
+from review_grade.api.plans import PLANS, get_plan, trial_ends_at
 from review_grade.api.store import Store
 from review_grade.api.stripe_http import StripeClient, refuse_live_secret_key
 
@@ -34,9 +36,19 @@ ENV_CANCEL_URL = "STRIPE_CHECKOUT_CANCEL_URL"
 
 _SIGNATURE_TOLERANCE_SECONDS = 300
 
+# Stripe Checkout and prices are USD monthly; must match plans.py cents.
+_EXPECTED_CURRENCY = "usd"
+_EXPECTED_INTERVAL = "month"
+
+PriceFetcher = Callable[[str], Mapping[str, Any]]
+
 
 class SignatureError(Exception):
     """Stripe-Signature header failed verification."""
+
+
+class StripePriceMismatch(ValueError):
+    """Configured Stripe price id does not match plans.py amount/currency/interval."""
 
 
 @dataclass(frozen=True)
@@ -72,7 +84,7 @@ def load_stripe_env(environ: dict[str, str] | None = None) -> StripeEnv | None:
     values = {name: env.get(name, "").strip() for name in names}
     if any(not values[name] for name in names):
         return None
-    # Refuse live keys before constructing StripeEnv / starting the server.
+    # Refuse non-TEST keys before constructing StripeEnv / starting the server.
     refuse_live_secret_key(values[ENV_SECRET_KEY])
     return StripeEnv(
         secret_key=values[ENV_SECRET_KEY],
@@ -82,6 +94,65 @@ def load_stripe_env(environ: dict[str, str] | None = None) -> StripeEnv | None:
         success_url=values[ENV_SUCCESS_URL],
         cancel_url=values[ENV_CANCEL_URL],
     )
+
+
+def validate_configured_prices(
+    env: StripeEnv,
+    fetch_price: PriceFetcher,
+) -> None:
+    """Compare each configured price id to plans.py via an injectable fetcher.
+
+    Used at startup in TEST mode only (non-TEST keys are already refused).
+    ``fetch_price`` performs the network call in production; tests pass a stub.
+    Raises StripePriceMismatch on missing prices or amount/currency/interval drift.
+    """
+    configured = (
+        ("developer", env.price_developer, ENV_PRICE_DEVELOPER),
+        ("fleet", env.price_fleet, ENV_PRICE_FLEET),
+    )
+    for plan_id, price_id, env_name in configured:
+        plan = PLANS[plan_id]
+        try:
+            price = fetch_price(price_id)
+        except StripePriceMismatch:
+            raise
+        except Exception as exc:
+            raise StripePriceMismatch(
+                f"{env_name} price {price_id!r} could not be fetched for plan "
+                f"{plan_id!r}: {exc}"
+            ) from exc
+        if not isinstance(price, Mapping):
+            raise StripePriceMismatch(
+                f"{env_name} price {price_id!r} for plan {plan_id!r} returned "
+                f"a non-object response"
+            )
+        unit_amount = price.get("unit_amount")
+        currency = price.get("currency")
+        if isinstance(currency, str):
+            currency = currency.lower()
+        recurring = price.get("recurring")
+        interval = None
+        if isinstance(recurring, Mapping):
+            interval = recurring.get("interval")
+        expected_amount = plan.monthly_price_cents
+        problems: list[str] = []
+        if unit_amount != expected_amount:
+            problems.append(
+                f"unit_amount {unit_amount!r} != plans.py {expected_amount}"
+            )
+        if currency != _EXPECTED_CURRENCY:
+            problems.append(
+                f"currency {currency!r} != {_EXPECTED_CURRENCY!r}"
+            )
+        if interval != _EXPECTED_INTERVAL:
+            problems.append(
+                f"recurring.interval {interval!r} != {_EXPECTED_INTERVAL!r}"
+            )
+        if problems:
+            raise StripePriceMismatch(
+                f"{env_name} price {price_id!r} for plan {plan_id!r} mismatches "
+                f"plans.py: " + "; ".join(problems)
+            )
 
 
 def verify_stripe_signature(

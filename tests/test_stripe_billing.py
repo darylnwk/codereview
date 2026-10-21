@@ -22,6 +22,7 @@ from review_grade.api.plans import (
     trial_ends_at,
 )
 from review_grade.api.store import Store
+from review_grade.api.plans import FLEET
 from review_grade.api.stripe_billing import (
     ENV_CANCEL_URL,
     ENV_PRICE_DEVELOPER,
@@ -30,14 +31,16 @@ from review_grade.api.stripe_billing import (
     ENV_SUCCESS_URL,
     ENV_WEBHOOK_SECRET,
     StripeEnv,
+    StripePriceMismatch,
     apply_card_on_file,
     create_card_setup_checkout,
     handle_stripe_webhook,
     load_stripe_env,
     sign_payload,
+    validate_configured_prices,
     verify_stripe_signature,
 )
-from review_grade.api.stripe_http import LiveModeRefused, StripeClient, StripeError
+from review_grade.api.stripe_http import LiveModeRefused, StripeClient, StripeError, refuse_live_secret_key
 
 
 _WEBHOOK_SECRET = "whsec_test_secret_for_unit_tests_only"
@@ -605,43 +608,171 @@ class SignatureHelperTests(unittest.TestCase):
             )
 
 
+def _full_stripe_env(secret_key: str) -> dict[str, str]:
+    return {
+        ENV_SECRET_KEY: secret_key,
+        ENV_WEBHOOK_SECRET: "whsec_x",
+        ENV_PRICE_DEVELOPER: "price_d",
+        ENV_PRICE_FLEET: "price_f",
+        ENV_SUCCESS_URL: "https://ok/success",
+        ENV_CANCEL_URL: "https://ok/cancel",
+    }
+
+
+def _matching_price(plan_id: str, price_id: str) -> dict:
+    plan = DEVELOPER if plan_id == "developer" else FLEET
+    return {
+        "id": price_id,
+        "object": "price",
+        "unit_amount": plan.monthly_price_cents,
+        "currency": "usd",
+        "recurring": {"interval": "month", "interval_count": 1},
+    }
+
+
 class EnvLoaderTests(unittest.TestCase):
     def test_load_stripe_env_requires_all_names(self) -> None:
         self.assertIsNone(load_stripe_env({}))
         partial = {ENV_SECRET_KEY: "sk_test_x"}
         self.assertIsNone(load_stripe_env(partial))
-        full = {
-            ENV_SECRET_KEY: "sk_test_x",
-            ENV_WEBHOOK_SECRET: "whsec_x",
-            ENV_PRICE_DEVELOPER: "price_d",
-            ENV_PRICE_FLEET: "price_f",
-            ENV_SUCCESS_URL: "https://ok/success",
-            ENV_CANCEL_URL: "https://ok/cancel",
-        }
-        loaded = load_stripe_env(full)
+        loaded = load_stripe_env(_full_stripe_env("sk_test_x"))
         assert loaded is not None
         self.assertEqual(loaded.price_for("developer"), "price_d")
         self.assertEqual(loaded.price_for("fleet"), "price_f")
 
-    def test_live_secret_key_refused_without_printing_value(self) -> None:
-        live = "sk_live_" + ("x" * 24)
-        full = {
-            ENV_SECRET_KEY: live,
-            ENV_WEBHOOK_SECRET: "whsec_x",
-            ENV_PRICE_DEVELOPER: "price_d",
-            ENV_PRICE_FLEET: "price_f",
-            ENV_SUCCESS_URL: "https://ok/success",
-            ENV_CANCEL_URL: "https://ok/cancel",
-        }
+    def test_allowed_secret_key_prefixes_load(self) -> None:
+        for prefix in ("sk_test_", "rk_test_"):
+            with self.subTest(prefix=prefix):
+                key = prefix + ("a" * 24)
+                loaded = load_stripe_env(_full_stripe_env(key))
+                assert loaded is not None
+                self.assertEqual(loaded.secret_key, key)
+                # Construction must succeed for allowed TEST prefixes.
+                StripeClient(key, transport=lambda *a: (200, b"{}"))
+
+    def test_refused_secret_key_prefixes(self) -> None:
+        refused = (
+            ("sk_live_", "sk_live_" + ("x" * 24)),
+            ("rk_live_", "rk_live_" + ("y" * 24)),
+            ("pk_test_", "pk_test_" + ("z" * 24)),
+            ("pk_live_", "pk_live_" + ("w" * 24)),
+            ("empty", ""),
+            ("garbage", "not-a-stripe-key"),
+            ("sk_test_without_trailing_underscore", "sk_test"),
+        )
+        for label, key in refused:
+            with self.subTest(label=label):
+                with self.assertRaises(LiveModeRefused) as guard_ctx:
+                    refuse_live_secret_key(key)
+                guard_message = str(guard_ctx.exception)
+                self.assertIn("sk_test_", guard_message)
+                self.assertIn("rk_test_", guard_message)
+                self.assertIn("TEST mode", guard_message)
+                with self.assertRaises(LiveModeRefused):
+                    StripeClient(key)
+                if key:
+                    # Non-empty refused values fail at load time too.
+                    with self.assertRaises(LiveModeRefused):
+                        load_stripe_env(_full_stripe_env(key))
+                else:
+                    # Empty STRIPE_SECRET_KEY is treated as unset (incomplete env).
+                    self.assertIsNone(load_stripe_env(_full_stripe_env("")))
+
+    def test_refused_key_value_never_appears_in_error(self) -> None:
+        unique = "sk_live_NEVER_ECHO_THIS_UNIQUE_SUFFIX_9f3a"
         with self.assertRaises(LiveModeRefused) as ctx:
-            load_stripe_env(full)
+            load_stripe_env(_full_stripe_env(unique))
         message = str(ctx.exception)
-        self.assertIn("sk_live_", message)
-        self.assertIn("TEST mode", message)
-        self.assertNotIn(live, message)
+        self.assertNotIn(unique, message)
+        self.assertNotIn("NEVER_ECHO", message)
         with self.assertRaises(LiveModeRefused) as client_ctx:
-            StripeClient(live)
-        self.assertNotIn(live, str(client_ctx.exception))
+            StripeClient(unique)
+        self.assertNotIn(unique, str(client_ctx.exception))
+
+
+class ConfiguredPriceValidationTests(unittest.TestCase):
+    def _env(self) -> StripeEnv:
+        loaded = load_stripe_env(_full_stripe_env("sk_test_price_check"))
+        assert loaded is not None
+        return loaded
+
+    def test_matching_prices_pass(self) -> None:
+        env = self._env()
+        catalog = {
+            env.price_developer: _matching_price("developer", env.price_developer),
+            env.price_fleet: _matching_price("fleet", env.price_fleet),
+        }
+
+        def fetch(price_id: str) -> dict:
+            return catalog[price_id]
+
+        validate_configured_prices(env, fetch)
+
+    def test_wrong_amount_fails(self) -> None:
+        env = self._env()
+
+        def fetch(price_id: str) -> dict:
+            price = _matching_price(
+                "developer" if price_id == env.price_developer else "fleet",
+                price_id,
+            )
+            if price_id == env.price_developer:
+                price["unit_amount"] = DEVELOPER.monthly_price_cents + 100
+            return price
+
+        with self.assertRaises(StripePriceMismatch) as ctx:
+            validate_configured_prices(env, fetch)
+        message = str(ctx.exception)
+        self.assertIn("unit_amount", message)
+        self.assertIn(str(DEVELOPER.monthly_price_cents), message)
+
+    def test_wrong_currency_fails(self) -> None:
+        env = self._env()
+
+        def fetch(price_id: str) -> dict:
+            price = _matching_price(
+                "developer" if price_id == env.price_developer else "fleet",
+                price_id,
+            )
+            if price_id == env.price_fleet:
+                price["currency"] = "eur"
+            return price
+
+        with self.assertRaises(StripePriceMismatch) as ctx:
+            validate_configured_prices(env, fetch)
+        self.assertIn("currency", str(ctx.exception))
+        self.assertIn("eur", str(ctx.exception))
+
+    def test_wrong_interval_fails(self) -> None:
+        env = self._env()
+
+        def fetch(price_id: str) -> dict:
+            price = _matching_price(
+                "developer" if price_id == env.price_developer else "fleet",
+                price_id,
+            )
+            if price_id == env.price_developer:
+                price["recurring"] = {"interval": "year", "interval_count": 1}
+            return price
+
+        with self.assertRaises(StripePriceMismatch) as ctx:
+            validate_configured_prices(env, fetch)
+        self.assertIn("interval", str(ctx.exception))
+        self.assertIn("year", str(ctx.exception))
+
+    def test_missing_price_fails(self) -> None:
+        env = self._env()
+
+        def fetch(price_id: str) -> dict:
+            if price_id == env.price_fleet:
+                raise StripeError(404, {"error": {"message": "No such price"}})
+            return _matching_price("developer", price_id)
+
+        with self.assertRaises(StripePriceMismatch) as ctx:
+            validate_configured_prices(env, fetch)
+        message = str(ctx.exception)
+        self.assertIn("could not be fetched", message)
+        self.assertIn(env.price_fleet, message)
 
 
 class StripeHttpFormTests(unittest.TestCase):
