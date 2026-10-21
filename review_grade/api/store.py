@@ -446,20 +446,17 @@ class Store:
             )
 
     def save_review_cost(self, record) -> None:
-        """Store internal provider cost for one review. Not exposed on GET /v1/runs."""
+        """Insert-only cost row for one review. Not exposed on GET /v1/runs.
+
+        A lost claim must never overwrite a winner's row: conflict is ignored.
+        """
         total = record.total_cost_usd
         with self.transaction():
             self._conn.execute(
                 """
-                INSERT INTO review_costs (
+                INSERT OR IGNORE INTO review_costs (
                     run_id, user_id, attempts_json, total_cost_usd, charged, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    user_id = excluded.user_id,
-                    attempts_json = excluded.attempts_json,
-                    total_cost_usd = excluded.total_cost_usd,
-                    charged = excluded.charged,
-                    created_at = excluded.created_at
                 """,
                 (
                     record.run_id,
@@ -479,7 +476,7 @@ class Store:
                     ),
                     None if total is None else float(total),
                     1 if record.charged else 0,
-                    format_time(datetime.now(timezone.utc)),
+                    format_time(datetime.now(UTC)),
                 ),
             )
 

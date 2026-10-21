@@ -8,7 +8,7 @@ import logging
 import secrets
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from review_grade.api.cost import project_cost
 from review_grade.api.review_cost import AttemptUsage, record_review_cost, unknown_usage
@@ -78,6 +78,8 @@ def settle_one(store: Store, review) -> bool:
     user_id = int(row["user_id"])
     usages: list[AttemptUsage] = []
     charged = False
+    # "lost" means another worker already closed the run — never write cost.
+    lost_claim = False
     try:
         outcome = _judge(row, review, usages)
         if isinstance(outcome, _Done):
@@ -90,7 +92,10 @@ def settle_one(store: Store, review) -> bool:
                 outcome.partial,
                 outcome.omitted_json,
             )
-            charged = result == "done"
+            if result == "lost":
+                lost_claim = True
+            else:
+                charged = result == "done"
         else:
             store.mark_failed(run_id, token)
             charged = False
@@ -99,7 +104,10 @@ def settle_one(store: Store, review) -> bool:
         charged = False
         if not usages:
             usages.append(unknown_usage(REVIEWER_MODEL))
-    _record_settle_cost(store, run_id=run_id, account=user_id, usages=usages, charged=charged)
+    if not lost_claim:
+        _record_settle_cost(
+            store, run_id=run_id, account=user_id, usages=usages, charged=charged
+        )
     return True
 
 
@@ -127,7 +135,7 @@ def _record_settle_cost(
 
 
 def _judge(row, review, usages: list[AttemptUsage]) -> _Done | None:
-    if _expired(str(row["created_at"]), datetime.now(timezone.utc)):
+    if _expired(str(row["created_at"]), datetime.now(UTC)):
         usages.append(unknown_usage(REVIEWER_MODEL))
         return None
     diff = row["diff_text"]
@@ -173,7 +181,7 @@ def _call_review(review, diff: str, usages: list[AttemptUsage]):
 
 
 def _expired(created_at: str, now: datetime) -> bool:
-    moment = datetime.strptime(created_at, _CREATED_AT).replace(tzinfo=timezone.utc)
+    moment = datetime.strptime(created_at, _CREATED_AT).replace(tzinfo=UTC)
     return now - moment > _STALE_AFTER
 
 

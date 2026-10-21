@@ -17,6 +17,7 @@ from review_grade.api.model_pricing import MODEL_PRICING
 from review_grade.api.review_cost import (
     AttemptCost,
     AttemptUsage,
+    ReviewCostRecord,
     build_attempt,
     build_review_cost,
     known_usage,
@@ -26,7 +27,7 @@ from review_grade.api.review_cost import (
 )
 from review_grade.api.store import Store, format_time
 from review_grade.api.worker import settle_one
-from review_grade.reviewer import ProviderError, REVIEWER_MODEL, review_diff
+from review_grade.reviewer import ProviderError, _usage_from_cli_body, review_diff
 from review_grade.rubric import assemble_prompt
 
 # Test-only rates. Not production prices — production map stays TODO placeholders.
@@ -456,6 +457,98 @@ class SettleAndReviewDiffCostTests(unittest.TestCase):
             cases.append(self._cost(run_id))
         for stored in cases:
             self.assertIs(stored["charged"], False)
+
+    def test_lost_claim_race_does_not_overwrite_winner_cost(self) -> None:
+        """Loser mark_done='lost' must not clobber the winner's cost row."""
+        run_id = self._queue(name="race.py")
+
+        def winner(_diff: str) -> dict:
+            return dict(_FINDING)
+
+        def loser(_diff: str) -> dict:
+            # First settler owns the claim; release so a second settler can win.
+            self.store.release_queued_claims()
+            self.assertTrue(settle_one(self.store, winner))
+            winner_cost = self._cost(run_id)
+            self.assertTrue(winner_cost["charged"])
+            self.assertEqual(
+                self.store.get_run(self.key.user_id, run_id)["status"],
+                "done",
+            )
+            return dict(_FINDING)
+
+        self.assertTrue(settle_one(self.store, loser))
+        stored = self._cost(run_id)
+        self.assertIs(stored["charged"], True)
+        self.assertEqual(self.store.get_run(self.key.user_id, run_id)["status"], "done")
+        # Insert-only: a forged loser write must not replace the winner either.
+        self.store.save_review_cost(
+            ReviewCostRecord(
+                run_id=run_id,
+                account=self.key.user_id,
+                attempts=(),
+                total_cost_usd=None,
+                charged=False,
+            )
+        )
+        again = self._cost(run_id)
+        self.assertIs(again["charged"], True)
+
+    def test_save_review_cost_raise_does_not_undo_settle(self) -> None:
+        run_id = self._queue(name="raise.py")
+
+        def finding(_diff: str) -> dict:
+            return dict(_FINDING)
+
+        with patch.object(
+            self.store,
+            "save_review_cost",
+            side_effect=RuntimeError("disk full"),
+        ):
+            self.assertTrue(settle_one(self.store, finding))
+        row = self.store.get_run(self.key.user_id, run_id)
+        self.assertEqual(row["status"], "done")
+        self.assertIsNone(self.store.get_review_cost(run_id))
+
+
+class CliUsageEnvelopeTests(unittest.TestCase):
+    def test_missing_or_null_token_fields_are_unknown_not_zero(self) -> None:
+        cases = [
+            {"text": "{}"},
+            {"usage": None},
+            {"usage": {}},
+            {"usage": {"input_tokens": None, "output_tokens": None}},
+            {"usage": {"input_tokens": 10}},
+            {"usage": {"output_tokens": 4}},
+            {"usage": {"input_tokens": None, "output_tokens": 4}},
+            {"usage": {"prompt_tokens": None, "completion_tokens": 1}},
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                usage = _usage_from_cli_body(body, model="test-model")
+                self.assertFalse(usage.usage_known)
+                self.assertIsNone(usage.input_tokens)
+                self.assertIsNone(usage.output_tokens)
+                # Mutant `int(raw or 0)` must fail: unknown stays None, not 0.
+                self.assertNotEqual(usage.input_tokens, 0)
+                self.assertNotEqual(usage.output_tokens, 0)
+
+    def test_explicit_zero_tokens_are_known(self) -> None:
+        usage = _usage_from_cli_body(
+            {"usage": {"input_tokens": 0, "output_tokens": 0}},
+            model="test-model",
+        )
+        self.assertTrue(usage.usage_known)
+        self.assertEqual(usage.input_tokens, 0)
+        self.assertEqual(usage.output_tokens, 0)
+
+
+class KnownUsageValidationTests(unittest.TestCase):
+    def test_known_usage_rejects_negative_token_counts(self) -> None:
+        with self.assertRaises(ValueError):
+            known_usage("test-model", input_tokens=-1, output_tokens=0)
+        with self.assertRaises(ValueError):
+            known_usage("test-model", input_tokens=0, output_tokens=-2)
 
 
 if __name__ == "__main__":
