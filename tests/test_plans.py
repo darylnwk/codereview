@@ -17,8 +17,10 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+from review_grade.api import http as http_api
+from review_grade.api.gate import Accepted
 from review_grade.api.plans import (
     ANNUAL_PRICING,
     DEFAULT_MONTHLY_CAP_CENTS,
@@ -39,8 +41,6 @@ from review_grade.api.plans import (
     overage_spend_usd,
     within_monthly_cap,
 )
-from review_grade.api import http as http_api
-from review_grade.api.gate import Accepted
 from review_grade.api.store import Store, format_time
 from review_grade.api.worker import reviewer_for, settle_one
 
@@ -74,7 +74,7 @@ def _seed_period_runs(
     created_at: str | None = None,
 ) -> None:
     """Insert settled/queued rows with a chosen created_at (current period by default)."""
-    when = created_at or format_time(datetime.now(timezone.utc))
+    when = created_at or format_time(datetime.now(UTC))
     with store.transaction():
         for index in range(done):
             run_id = "run_done_" + secrets.token_hex(8) + f"_{index}"
@@ -181,9 +181,9 @@ class PlanMathTests(unittest.TestCase):
         self.assertFalse(allow_next_review(FLEET, 3333, 50))
 
     def test_billing_period_start_is_month_utc(self) -> None:
-        moment = datetime(2026, 10, 21, 15, 30, tzinfo=timezone.utc)
+        moment = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
         start = billing_period_start(moment)
-        self.assertEqual(start, datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(start, datetime(2026, 10, 1, 0, 0, tzinfo=UTC))
 
 
 class PlanStoreAndApiTests(unittest.TestCase):
@@ -384,7 +384,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         auth = store.authenticate(key)
         assert auth is not None
         store.set_billing(auth.user_id, monthly_cap_usd=0)
-        prior = format_time(datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc))
+        prior = format_time(datetime(2026, 9, 15, 12, 0, tzinfo=UTC))
         _seed_period_runs(
             store,
             user_id=auth.user_id,
@@ -392,7 +392,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
             done=250,
             created_at=prior,
         )
-        now = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
         self.assertEqual(store.billing(auth.user_id, now=now).period_reviews, 0)
         self.assertTrue(allow_next_review(DEVELOPER, 0, 0))
 
