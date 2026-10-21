@@ -21,22 +21,30 @@ class StripeError(Exception):
     def __init__(self, status: int, body: object) -> None:
         self.status = status
         self.body = body
-        super().__init__(f"Stripe HTTP {status}: {body!r}")
+        # Message is status-only so tracebacks never echo response bodies.
+        super().__init__(f"Stripe HTTP {status}")
+
+
+# Only TEST-mode secret/restricted keys. Live, publishable, empty, and garbage are refused.
+_ALLOWED_SECRET_PREFIXES = ("sk_test_", "rk_test_")
 
 
 class LiveModeRefused(ValueError):
-    """Raised when a live secret key is supplied. Message never includes the key."""
+    """Raised when STRIPE_SECRET_KEY is not a TEST secret/restricted key.
+
+    The message never includes the key value.
+    """
 
     def __init__(self) -> None:
         super().__init__(
-            "STRIPE_SECRET_KEY begins with sk_live_; this API runs in TEST mode only. "
-            "Refusing to start."
+            "STRIPE_SECRET_KEY must start with sk_test_ or rk_test_; "
+            "this API runs in TEST mode only. Refusing to start."
         )
 
 
 def refuse_live_secret_key(secret_key: str) -> None:
-    """Raise LiveModeRefused if ``secret_key`` is a live key. Never logs the value."""
-    if secret_key.startswith("sk_live_"):
+    """Raise LiveModeRefused unless the key is sk_test_ or rk_test_. Never logs the value."""
+    if not isinstance(secret_key, str) or not secret_key.startswith(_ALLOWED_SECRET_PREFIXES):
         raise LiveModeRefused()
 
 
@@ -85,8 +93,6 @@ class StripeClient:
         transport: Transport | None = None,
         base_url: str = DEFAULT_BASE_URL,
     ) -> None:
-        if not secret_key:
-            raise ValueError("secret_key must be non-empty")
         refuse_live_secret_key(secret_key)
         self._secret_key = secret_key
         self._transport = transport or _default_transport
@@ -148,6 +154,9 @@ class StripeClient:
 
     def retrieve_setup_intent(self, setup_intent_id: str) -> dict:
         return self.request("GET", f"/v1/setup_intents/{setup_intent_id}")
+
+    def retrieve_price(self, price_id: str) -> dict:
+        return self.request("GET", f"/v1/prices/{price_id}")
 
     def create_subscription(
         self,
