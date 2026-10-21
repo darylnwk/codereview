@@ -320,25 +320,7 @@ class Store:
             ).fetchone()
             if owned is None:
                 return "lost"
-            credited = self._conn.execute(
-                """
-                UPDATE users
-                SET credits = credits - 1
-                WHERE id = ? AND credits > 0
-                """,
-                (user_id,),
-            ).rowcount
-            if credited != 1:
-                self._close(
-                    run_id,
-                    token,
-                    status="failed",
-                    findings_json=None,
-                    cost_usd=None,
-                    partial=0,
-                    omitted_json=None,
-                )
-                return "failed"
+            # credits is legacy and unused for access; period/cap gating lives in accept.
             closed = self._close(
                 run_id,
                 token,
@@ -349,7 +331,7 @@ class Store:
                 omitted_json=omitted_json,
             )
             if closed != 1:
-                raise RuntimeError("queued run disappeared after the credit update")
+                raise RuntimeError("queued run disappeared while marking done")
             return "done"
 
     def _user_id(self, email: str) -> int | None:

@@ -27,7 +27,7 @@ from review_grade.api.plans import (
     DEVELOPER,
     FLEET,
     PLANS,
-    TRIAL_DAYS,
+    _cap_cents,
     allow_next_review,
     billing_period_start,
     charge_for_review,
@@ -38,6 +38,7 @@ from review_grade.api.plans import (
     overage_reviews,
     overage_spend_cents,
     overage_spend_usd,
+    trial_ends_at,
     within_monthly_cap,
 )
 from review_grade.api.store import Store, format_time
@@ -126,9 +127,10 @@ class PlanMathTests(unittest.TestCase):
         self.assertIs(get_plan("developer"), DEVELOPER)
         self.assertIs(get_plan("fleet"), FLEET)
 
-    def test_default_cap_constant_is_single_source(self) -> None:
-        self.assertEqual(DEFAULT_MONTHLY_CAP_USD, 50)
-        self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, 5000)
+    def test_default_cap_constant_is_zero(self) -> None:
+        # Daryl, 21 Oct 2026: no default overage on any tier.
+        self.assertEqual(DEFAULT_MONTHLY_CAP_USD, 0)
+        self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, 0)
         self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, DEFAULT_MONTHLY_CAP_USD * 100)
 
     def test_no_legacy_twenty_review_trial(self) -> None:
@@ -137,7 +139,6 @@ class PlanMathTests(unittest.TestCase):
         for plan in PLANS.values():
             self.assertNotEqual(plan.included_reviews, 20)
             self.assertNotEqual(plan.monthly_price_usd, 0)
-        self.assertEqual(TRIAL_DAYS, 30)
         self.assertFalse(ANNUAL_PRICING)
 
     def test_included_reviews_have_no_overage_charge(self) -> None:
@@ -167,22 +168,44 @@ class PlanMathTests(unittest.TestCase):
         self.assertEqual(charge_for_review(FLEET, 3000, status="failed"), 0.0)
 
     def test_user_cap_boundary_exactly_at_cap(self) -> None:
+        # Cap $0: last included allowed; first extra refused.
+        self.assertTrue(allow_next_review(DEVELOPER, 249, 0))
+        self.assertFalse(allow_next_review(DEVELOPER, 250, 0))
+        self.assertTrue(allow_next_review(FLEET, 2499, 0))
+        self.assertFalse(allow_next_review(FLEET, 2500, 0))
         # Cap $50 on Developer: 333 extras * 15¢ = 4995¢ <= 5000¢; 334th exceeds.
         self.assertTrue(within_monthly_cap(DEVELOPER, 583, 50))
         self.assertFalse(within_monthly_cap(DEVELOPER, 584, 50))
         self.assertTrue(allow_next_review(DEVELOPER, 582, 50))
         self.assertFalse(allow_next_review(DEVELOPER, 583, 50))
-        self.assertTrue(allow_next_review(DEVELOPER, 249, 0))
-        self.assertFalse(allow_next_review(DEVELOPER, 250, 0))
         # Fleet $0.06: 833 extras * 6¢ = 4998¢; 834th exceeds.
         self.assertTrue(within_monthly_cap(FLEET, 3333, 50))
         self.assertFalse(within_monthly_cap(FLEET, 3334, 50))
         self.assertFalse(allow_next_review(FLEET, 3333, 50))
 
+    def test_fractional_dollar_cap_uses_round(self) -> None:
+        # $12.99 → 1299¢. Spend $12.15 = 81 extras * 15¢; that review is allowed.
+        # int(12.99)*100 == 1200 would wrongly refuse it (mutation target).
+        self.assertEqual(_cap_cents(12.99), 1299)
+        self.assertEqual(overage_spend_cents(DEVELOPER, 331), 1215)
+        self.assertTrue(within_monthly_cap(DEVELOPER, 331, 12.99))
+        self.assertTrue(allow_next_review(DEVELOPER, 330, 12.99))
+        # Boundary: 86 extras = 1290¢ ok; 87 extras = 1305¢ over 1299¢.
+        self.assertTrue(within_monthly_cap(DEVELOPER, 336, 12.99))
+        self.assertFalse(within_monthly_cap(DEVELOPER, 337, 12.99))
+        self.assertTrue(allow_next_review(DEVELOPER, 335, 12.99))
+        self.assertFalse(allow_next_review(DEVELOPER, 336, 12.99))
+
     def test_billing_period_start_is_month_utc(self) -> None:
         moment = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
         start = billing_period_start(moment)
         self.assertEqual(start, datetime(2026, 10, 1, 0, 0, tzinfo=UTC))
+
+    def test_trial_ends_at_next_calendar_month(self) -> None:
+        card = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(card), datetime(2026, 11, 1, 0, 0, tzinfo=UTC))
+        year_end = datetime(2026, 12, 31, 23, 59, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(year_end), datetime(2027, 1, 1, 0, 0, tzinfo=UTC))
 
 
 class PlanStoreAndApiTests(unittest.TestCase):
@@ -289,15 +312,52 @@ class PlanStoreAndApiTests(unittest.TestCase):
         cols = {str(r["name"]) for r in store._conn.execute("PRAGMA table_info(users)")}
         self.assertNotIn("reviews_finished", cols)
 
-    def test_cap_reached_at_exact_boundary(self) -> None:
-        key = self.seed(5)
+    def test_cap_zero_last_included_accepted_first_extra_refused(self) -> None:
+        key = self.seed(0)
         store = Store(self.db)
         try:
             auth = store.authenticate(key)
             assert auth is not None
-            store.set_billing(auth.user_id, monthly_cap_usd=0)
-            # Stamp at period start so the 60s accept rate window stays empty.
+            self.assertEqual(store.billing(auth.user_id).monthly_cap_usd, 0)
             when = format_time(billing_period_start())
+            _seed_period_runs(
+                store,
+                user_id=auth.user_id,
+                key_id=auth.id,
+                done=249,
+                created_at=when,
+            )
+        finally:
+            store.close()
+        port = self.open_quiet_server()
+        ok_status, ok_body = self.exchange(
+            port,
+            "POST",
+            "/v1/reviews",
+            key,
+            {"diff": _added("last_included.py", 1, "a")},
+        )
+        self.assertEqual(ok_status, 202)
+        self.assertIn("run_id", ok_body)
+        denied_status, denied = self.exchange(
+            port,
+            "POST",
+            "/v1/reviews",
+            key,
+            {"diff": _added("first_extra.py", 1, "b")},
+        )
+        self.assertEqual(denied_status, 402)
+        self.assertEqual(denied["error"], "cap_reached")
+        self.assertIn("Set a monthly cap", denied["message"])
+
+    def test_after_setting_cap_extras_accepted_up_to_it(self) -> None:
+        key = self.seed(0)
+        store = Store(self.db)
+        try:
+            auth = store.authenticate(key)
+            assert auth is not None
+            when = format_time(billing_period_start())
+            # Past included; $0.15 overage; cap $0.30 allows two extras.
             _seed_period_runs(
                 store,
                 user_id=auth.user_id,
@@ -305,27 +365,45 @@ class PlanStoreAndApiTests(unittest.TestCase):
                 done=250,
                 created_at=when,
             )
-            self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
+            store.set_billing(auth.user_id, monthly_cap_usd=0)
         finally:
             store.close()
         port = self.open_quiet_server()
-        status, body = self.exchange(
+        blocked, body = self.exchange(
             port,
             "POST",
             "/v1/reviews",
             key,
-            {"diff": _added("billing/charge.py", 1, "c")},
+            {"diff": _added("blocked.py", 1, "x")},
         )
-        self.assertEqual(status, 402)
+        self.assertEqual(blocked, 402)
         self.assertEqual(body["error"], "cap_reached")
-        connection = sqlite3.connect(self.db)
+        store = Store(self.db)
         try:
-            count = connection.execute(
-                "SELECT COUNT(*) FROM runs WHERE status = 'queued'"
-            ).fetchone()[0]
+            auth = store.authenticate(key)
+            assert auth is not None
+            # $1 → six extras at $0.15; seventh is refused.
+            store.set_billing(auth.user_id, monthly_cap_usd=1)
         finally:
-            connection.close()
-        self.assertEqual(count, 0)
+            store.close()
+        for i in range(6):
+            status, _ = self.exchange(
+                port,
+                "POST",
+                "/v1/reviews",
+                key,
+                {"diff": _added(f"extra{i}.py", 1, "y")},
+            )
+            self.assertEqual(status, 202, msg=f"extra {i + 1} of 6")
+        over, over_body = self.exchange(
+            port,
+            "POST",
+            "/v1/reviews",
+            key,
+            {"diff": _added("over_cap.py", 1, "z")},
+        )
+        self.assertEqual(over, 402)
+        self.assertEqual(over_body["error"], "cap_reached")
 
     def test_failed_runs_never_count_toward_period(self) -> None:
         store = Store(self.db)

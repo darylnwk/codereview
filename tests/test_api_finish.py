@@ -243,11 +243,11 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(got["omitted"], [])
         self.assertEqual(got["findings"], [_FINDING])
         self.assertEqual(got["cost_usd"], 0.0004)
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.credits(server, key), 5)
         again_status, again = server.exchange("GET", "/v1/runs/" + body["run_id"], key)
         self.assertEqual(again_status, 200)
         self.assertEqual(again["findings"], got["findings"])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.credits(server, key), 5)
         row = self.run_row(body["run_id"])
         self.assertIsNone(row["diff_text"])
         self.assertIsNone(row["cache_read"])
@@ -304,11 +304,11 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(got["status"], "done")
         self.assertEqual(got["partial"], True)
         self.assertEqual(got["omitted"], ["skip.py"])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.credits(server, key), 5)
 
-    def test_one_credit_finishes_the_oldest_run_only(self) -> None:
+    def test_two_queued_runs_both_finish(self) -> None:
         quiet = self.open_server(worker=False)
-        key = self.seed(1)
+        key = self.seed(0)
         first_status, first = quiet.exchange(
             "POST",
             "/v1/reviews",
@@ -328,8 +328,7 @@ class ApiFinishTests(unittest.TestCase):
         oldest = self.wait_settled(server, key, first["run_id"])
         newer = self.wait_settled(server, key, second["run_id"])
         self.assertEqual(oldest["status"], "done")
-        self.assertEqual(newer["status"], "failed")
-        self.assertIsNone(newer["findings"])
+        self.assertEqual(newer["status"], "done")
         self.assertEqual(self.credits(server, key), 0)
 
     def test_stale_run_fails_and_keeps_credits(self) -> None:
@@ -371,10 +370,10 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(status, 202)
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "done")
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.credits(server, key), 5)
         server.stop()
         restarted = self.open_server(worker=True, fixture="finding")
-        self.assertEqual(self.credits(restarted, key), 4)
+        self.assertEqual(self.credits(restarted, key), 5)
         again_status, again = restarted.exchange("GET", "/v1/runs/" + body["run_id"], key)
         self.assertEqual(again_status, 200)
         self.assertEqual(again["findings"], got["findings"])
@@ -404,7 +403,7 @@ class ApiFinishTests(unittest.TestCase):
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "done")
         self.assertEqual(got["findings"], [_FINDING])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.credits(server, key), 5)
         server.stop()
         restarted = self.open_server(worker=True, fixture="error")
-        self.assertEqual(self.credits(restarted, key), 4)
+        self.assertEqual(self.credits(restarted, key), 5)

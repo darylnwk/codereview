@@ -21,7 +21,6 @@ from review_grade.api.store import Store
 _RUN_ID = re.compile(r"^run_[A-Za-z0-9_-]{16}$")
 _UNAUTHORIZED = {"error": "unauthorized", "message": "The API key is not valid."}
 _BAD_REQUEST = {"error": "bad_request", "message": "The review request is not valid."}
-_NO_CREDIT = {"error": "no_credit", "message": "The account has no credits."}
 _NOT_FOUND = {"error": "not_found", "message": "The run was not found."}
 _CONFLICT = {
     "error": "conflict",
@@ -244,15 +243,16 @@ class ApiAcceptTests(unittest.TestCase):
         self.assertIsNone(got["findings"])
         self.assertNotEqual(got["findings"], [])
 
-    def test_no_credit_returns_402_and_inserts_nothing(self) -> None:
+    def test_zero_credits_under_cap_is_accepted(self) -> None:
+        # credits is legacy; access uses per-period plan/cap.
         key = self.seed(0)
         status, body = self.exchange("POST", "/v1/reviews", key, {"diff": _tiny("a.py")})
-        self.assertEqual(status, 402)
-        self.assertEqual(body, _NO_CREDIT)
+        self.assertEqual(status, 202)
+        self.assertEqual(list(body), ["run_id"])
         me_status, me = self.exchange("GET", "/v1/me", key)
         self.assertEqual(me_status, 200)
         self.assertEqual(me, {"credits": 0})
-        self.assertEqual(self.run_rows(), [])
+        self.assertEqual(len(self.run_rows()), 1)
 
     def test_generated_diff_returns_413(self) -> None:
         key = self.seed(3)

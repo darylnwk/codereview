@@ -1,8 +1,8 @@
 """Plan prices, included reviews, overage, and the user-set monthly cap.
 
 Decided by Daryl, 21 Oct 2026. There is no per-email free-review trial and no
-annual pricing. Trial is one free month on every paid tier after a Stripe card
-is on file; that start date is billing, not a separate plan id.
+annual pricing. Trial is one free calendar month on every paid tier after a
+Stripe card is on file; that start date is billing, not a separate plan id.
 
 Money math uses integer cents. Dollar helpers divide by 100 for display/tests.
 """
@@ -16,9 +16,10 @@ from datetime import datetime, timezone
 _FAILED = "failed"
 _DONE = "done"
 
-# Carried over from main (account mock / product default). Not new pricing.
-# Also applied to Fleet until a separate default is decided.
-DEFAULT_MONTHLY_CAP_USD = 50
+# Decision (Daryl, 21 Oct 2026): default monthly overage cap is $0 on every
+# tier — no default overage. After included reviews, accept returns cap_reached
+# until the user sets a positive monthly cap.
+DEFAULT_MONTHLY_CAP_USD = 0
 DEFAULT_MONTHLY_CAP_CENTS = DEFAULT_MONTHLY_CAP_USD * 100
 
 
@@ -56,8 +57,6 @@ PLANS: dict[str, Plan] = {
     FLEET.id: FLEET,
 }
 
-# Trial is not a plan row. Card-on-file starts one free month on any tier.
-TRIAL_DAYS = 30
 ANNUAL_PRICING = False
 
 
@@ -79,6 +78,20 @@ def billing_period_start(moment: datetime | None = None) -> datetime:
     else:
         now = now.astimezone(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def trial_ends_at(card_on_file_at: datetime) -> datetime:
+    """First instant after the free trial.
+
+    Trial is one calendar month UTC — the same unit as ``billing_period_start``,
+    not a fixed ``trial_period_days=30``. When wiring Stripe, set ``trial_end``
+    (or equivalent) to this boundary rather than a day count, so the free month
+    and included-review period stay aligned.
+    """
+    start = billing_period_start(card_on_file_at)
+    if start.month == 12:
+        return start.replace(year=start.year + 1, month=1)
+    return start.replace(month=start.month + 1)
 
 
 def overage_reviews(plan: Plan, finished: int) -> int:
@@ -126,7 +139,7 @@ def _cap_cents(cap_usd: float) -> int:
         raise TypeError("cap_usd must be a number")
     if cap_usd < 0:
         raise ValueError("cap_usd must be >= 0")
-    return int(cap_usd) * 100
+    return int(round(cap_usd * 100))
 
 
 def within_monthly_cap(plan: Plan, finished: int, cap_usd: float) -> bool:

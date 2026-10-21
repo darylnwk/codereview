@@ -22,15 +22,19 @@ Pricing decided by Daryl, 21 Oct 2026. No annual pricing. The old per-email free
 
 | Offer | Price | What they get |
 | --- | --- | --- |
-| Trial | 1 month free | On **all** tiers. Starts when the user adds a card through Stripe. Billing starts after the month unless cancelled |
-| Developer | $25 / month | 250 reviews included, then $0.15 per extra review. User-set monthly cap on extras (default $50) |
-| Fleet | $199 / month | 2,500 reviews included, then $0.06 per extra review. User-set monthly cap on extras (default $50) |
+| Trial | 1 calendar month free | On **all** tiers. Starts when the user adds a card through Stripe. Aligned with the billing calendar month (UTC for now), not a fixed 30-day count. Billing starts after that month unless cancelled |
+| Developer | $25 / month | 250 reviews included, then $0.15 per extra review. User-set monthly cap on extras (default **$0** — no overage until they set a cap) |
+| Fleet | $199 / month | 2,500 reviews included, then $0.06 per extra review. User-set monthly cap on extras (default **$0**) |
+
+**Default overage cap $0** on all tiers — decided by Daryl, 21 Oct 2026. After included reviews, accept returns `cap_reached` until the user sets a positive monthly cap.
 
 Unused included reviews end with the month. There is no single-review product and no pack of ten. Failed runs are free.
 
-Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents. Refuse any run projected over $0.15. Developer stays profitable if a typical run stays under $0.10. Fleet waits on measured per-run cost under ~$0.04 (see cache logging gap).
+Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents. Refuse any run projected over $0.15. Developer stays profitable if a typical run stays under $0.10.
 
-They pay because CI or their agent gets a structured review back, with a run id and a credit receipt. A chat will also review a diff. It will not sit in the pipeline.
+Note (not a ship blocker): the 12 Oct discussion aimed for Fleet per-run cost under ~$0.04 once real `cache_read` / `cache_write` logging exists. Fleet stays in the offer; fill cache columns later to measure.
+
+They pay because CI or their agent gets a structured review back, with a run id. A chat will also review a diff. It will not sit in the pipeline.
 
 What does not sell:
 
@@ -43,7 +47,7 @@ Expansion only after 5 of 10 trial users run a second review:
 
 - Shared balance for a team, at the same tier prices.
 
-Refund rule: if the reviewer fails, do not decrement the credit. The decrement is conditional, in the same transaction as the flip to `done`. The update matches a user row only when credits are greater than 0. If that update changes no row, the run is `failed` and credits stay 0.
+Access is gated by the per-period included/overage cap, not the legacy `credits` column (kept on `users` but not decremented on finish).
 
 ## User interface
 
@@ -51,7 +55,7 @@ Three screens. No practice list. No dashboard. No review box.
 
 ### 1. Review
 
-- Header: credits remaining, plan line (Developer or Fleet), overage rate, link to Keys.
+- Header: reviews left this period, plan line (Developer or Fleet), overage rate, link to Keys.
 - One input: the diff (paste or file).
 - Size line under the diff: changed lines, and the largest files.
 - Submit disabled until the diff is non-empty, or until it is over the hard cap.
@@ -78,8 +82,8 @@ Shown when the run is `done`. The page polls. The request does not wait on the m
 ### Auth and money
 
 - Magic link. Email in, link in, session cookie.
-- Stripe Checkout: card on file starts the 1-month free trial on the chosen tier (Developer or Fleet). After the trial month, the tier price bills unless cancelled. Included reviews reset each month; overage bills at the tier rate until the user-set monthly cap.
-- Account row: email, credits, plan, monthly cap, Stripe customer id.
+- Stripe Checkout: card on file starts the one calendar-month free trial on the chosen tier (Developer or Fleet). Align Stripe `trial_end` with that calendar-month boundary (not `trial_period_days=30`). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0).
+- Account row: email, credits (legacy), plan, monthly cap, Stripe customer id.
 
 ### What the UI will not have in v1
 
@@ -103,7 +107,7 @@ GET  /v1/runs/:id       { status, findings, partial, omitted, cost_usd }
 GET  /v1/me             { credits }
 ```
 
-`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not spend a credit. The credit decrements only when status flips to `done`. That decrement is in the same transaction. It matches a user only when credits are greater than 0. If it changes no row, the run is `failed` and credits stay 0. A second GET of a done run returns the same findings and does not decrement again. If the process dies before that transaction, the run stays queued, and the restarted worker charges once.
+`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not count toward the period. Accept reserves a period slot in the same transaction as the queued insert (cap check). Finish flips to `done` without touching `credits`. A second GET of a done run returns the same findings. If the process dies before finish, the run stays queued, and the restarted worker finishes once.
 
 When the body includes `files`, a done run sets `partial` true and `omitted` to the paths that were not selected. A done review of the full diff sets `partial` false and `omitted` to an empty list. A queued GET keeps `partial` false and `omitted` [] until the run is done.
 
@@ -196,13 +200,12 @@ Kill gate, before Stripe:
 1. Benchmark subset and kill-gate number. Locally passed 21 Oct 2026 (Daryl); still blocks Stripe until CI-verified if you want that bar.
 2. Reviewer worker, async run row, size check, cache logging.
 3. Three screens against the same review function.
-4. API keys + Stripe card-on-file 1-month trial on Developer and Fleet, Action snippet.
+4. API keys + Stripe card-on-file calendar-month trial on Developer and Fleet, Action snippet.
 5. Ten users. Five of ten run a second review unprompted: add the shared team balance. Else stop.
-6. Fleet cost gate: ship Fleet only when measured per-run cost is under ~$0.04 (needs real `cache_read` / `cache_write` logging).
 
 ## Tables
 
-- `users(email, credits, stripe_customer_id, plan, monthly_cap_usd)`
+- `users(email, credits, stripe_customer_id, plan, monthly_cap_usd)` — `credits` is legacy; default `monthly_cap_usd` is 0
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
 
