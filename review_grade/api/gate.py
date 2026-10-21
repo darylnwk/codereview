@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from review_grade.api.plans import CAP_REACHED_ZERO
+
 WINDOW_SECONDS = 60
 ACCEPT_LIMIT = 10
 _LINE_CAP = 8000
@@ -16,7 +18,7 @@ _GENERATED_SEGMENTS = frozenset({"snapshots", "vendor", "vendored"})
 _REFUSALS = {
     "bad_request": (400, "The review request is not valid."),
     "unauthorized": (401, "The API key is not valid."),
-    "no_credit": (402, "The account has no credits."),
+    "cap_reached": (402, CAP_REACHED_ZERO),
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),
@@ -68,7 +70,7 @@ class ShowRun:
 
 
 @dataclass(frozen=True)
-class ShowCredits:
+class ShowMe:
     status: int
 
 
@@ -80,12 +82,17 @@ class Refused:
     files: tuple[str, ...] | None = None
 
 
-Decision = Accepted | Replay | ShowRun | ShowCredits | Refused
+Decision = Accepted | Replay | ShowRun | ShowMe | Refused
 
 
-def refuse(code: str, files: tuple[str, ...] | None = None) -> Refused:
-    status, message = _REFUSALS[code]
-    return Refused(code, status, message, files)
+def refuse(
+    code: str,
+    files: tuple[str, ...] | None = None,
+    *,
+    message: str | None = None,
+) -> Refused:
+    status, default = _REFUSALS[code]
+    return Refused(code, status, default if message is None else message, files)
 
 
 def decide(op: PostOp | GetRunOp | GetMeOp) -> Decision:
@@ -109,7 +116,7 @@ def _decide_get_run(op: GetRunOp) -> Decision:
 def _decide_get_me(op: GetMeOp) -> Decision:
     if not op.key_ok:
         return refuse("unauthorized")
-    return ShowCredits(200)
+    return ShowMe(200)
 
 
 def _decide_post(op: PostOp) -> Decision:
@@ -124,8 +131,7 @@ def _decide_post(op: PostOp) -> Decision:
         if op.prior_diff_hash == digest:
             return Replay(202, op.prior_run_id)
         return refuse("conflict")
-    if op.credits <= 0:
-        return refuse("no_credit")
+    # Access is gated by the per-period plan cap in http.accept_review, not credits.
     kept = _select(raw, files)
     if kept.strip() == "":
         return refuse("bad_request")

@@ -33,7 +33,7 @@
       <div class="hero__copy">
         <p class="eyebrow rv">§01 &nbsp;Code review, as an API call</p>
         <h1 id="hero-h" class="display rv" style="--i:1">Code review <em>your agent</em> can&nbsp;call.</h1>
-        <p class="lede rv" style="--i:2">One API call per diff. Only what breaks, with the fix. From $0.10 a review, and failed runs are free.</p>
+        <p class="lede rv" style="--i:2">One API call per diff. Only what breaks, with the fix. Monthly plans with included reviews, and failed runs are free.</p>
         <div class="hero__cta rv" style="--i:3">
           <a class="btn btn--mark" href="#notyet">Join the early list <span class="arr" aria-hidden="true">→</span></a>
           <a class="btn btn--quiet link" href="#returns">See the response</a>
@@ -134,45 +134,34 @@
     <section class="band wrap" id="price" aria-labelledby="price-h">
       <div class="band__label"><p class="eyebrow rv">§04</p></div>
       <div class="band__main">
-        <h2 id="price-h" class="h2 rv">You pay per review. <em>A failed one is free.</em></h2>
-        <p class="meta rv">Planned pricing. Nothing is on sale yet.</p>
+        <h2 id="price-h" class="h2 rv">Monthly plans. <em>Failed reviews are always free.</em></h2>
+        <p class="meta rv">Planned pricing. Nothing is on sale yet. Your first month is free when you add a card. No extra charges until you set a monthly spending cap.</p>
         <div class="tiers">
-          <article class="tier rv" style="--i:0" aria-labelledby="t-free">
-            <h3 id="t-free" class="tier__name">Trial</h3>
-            <p class="tier__price"><span class="tier__amt">$0</span><span class="tier__unit">once</span></p>
-            <p class="tier__for">For trying it on a day of real pull requests.</p>
-            <a class="btn tier__cta" href="#notyet">Get notified <span class="arr" aria-hidden="true">→</span></a>
-            <ul class="tier__list">
-              <li>20 reviews, once per email</li>
-              <li>Browser, API, CI and agent</li>
-              <li>Findings: file, line, what breaks, fix</li>
-              <li>A failed review spends nothing</li>
-            </ul>
-          </article>
-          <article class="tier tier--rec rv" style="--i:1" aria-labelledby="t-month">
+          <article class="tier tier--rec rv" style="--i:0" aria-labelledby="t-dev">
             <span class="tag tag--mark tier__flag">Recommended</span>
-            <h3 id="t-month" class="tier__name">Month</h3>
+            <h3 id="t-dev" class="tier__name">Developer</h3>
             <p class="tier__price"><span class="tier__amt">$25</span><span class="tier__unit">per month</span></p>
-            <p class="tier__for">For a team or pipeline reviewing every pull request.</p>
+            <p class="tier__for">For a solo pipeline or agent reviewing every pull request.</p>
             <a class="btn btn--mark tier__cta" href="#notyet">Join the early list <span class="arr" aria-hidden="true">→</span></a>
             <ul class="tier__list">
-              <li>250 reviews, $0.10 each</li>
-              <li>API keys for CI and your agent</li>
-              <li>GitHub Action writes the job summary</li>
-              <li>Unused reviews end with the month</li>
+              <li>250 reviews included</li>
+              <li>Then $0.15 per extra review</li>
+              <li>No extra charges until you set a monthly spending cap</li>
+              <li>Your first month is free when you add a card</li>
               <li>A failed review spends nothing</li>
             </ul>
           </article>
-          <article class="tier rv" style="--i:2" aria-labelledby="t-usage">
-            <h3 id="t-usage" class="tier__name">Usage</h3>
-            <p class="tier__price"><span class="tier__amt">$0.15</span><span class="tier__unit">per review</span></p>
-            <p class="tier__for">On top of the Month, for busy weeks past 250.</p>
+          <article class="tier rv" style="--i:1" aria-labelledby="t-fleet">
+            <h3 id="t-fleet" class="tier__name">Fleet</h3>
+            <p class="tier__price"><span class="tier__amt">$199</span><span class="tier__unit">per month</span></p>
+            <p class="tier__for">For a busier org or CI fleet past a few hundred reviews.</p>
             <a class="btn tier__cta" href="#notyet">Get notified <span class="arr" aria-hidden="true">→</span></a>
             <ul class="tier__list">
-              <li>Same balance, same keys</li>
-              <li>Stops at a monthly cap you set</li>
-              <li>Cap starts at $50</li>
-              <li>Billed only when a review finishes</li>
+              <li>2,500 reviews included</li>
+              <li>Then $0.06 per extra review</li>
+              <li>No extra charges until you set a monthly spending cap</li>
+              <li>Your first month is free when you add a card</li>
+              <li>A failed review spends nothing</li>
             </ul>
           </article>
         </div>
@@ -185,7 +174,7 @@
         <h2 id="notyet-h" class="h2 rv">It is <em>not for sale</em> until it catches the bugs we already know about.</h2>
         <div class="gate">
           <p class="rv">Before we take money, the reviewer runs against a private set of pull requests with known, planted defects. It never sees the answer key. A separate matcher counts what it caught.</p>
-          <p class="rv" style="--i:1">The ship line is 85% of planted defects caught. It has not reached that line yet. If a later model or prompt drops it below 70%, we stop selling.</p>
+          <p class="rv" style="--i:1">The ship line is 85% of planted defects caught. The measured recall figure has not been published yet. If a later model or prompt drops it below 70%, we stop selling.</p>
           <div class="gate__meter rv" style="--i:2" role="img" aria-label="Ship line at 85 percent; current recall not published">
             <div class="gate__scale"><span style="left:70%">70 stop</span><span style="left:85%">85 ship</span></div>
             <div class="gate__track"><i class="gate__line gate__line--stop" style="left:70%"></i><i class="gate__line gate__line--ship" style="left:85%"></i></div>
