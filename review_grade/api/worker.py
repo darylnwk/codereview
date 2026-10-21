@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from review_grade.api.cost import project_cost
+from review_grade.api.review_cost import AttemptUsage, record_review_cost
 from review_grade.api.store import Store
 from review_grade.findings import check_findings
-from review_grade.reviewer import ProviderError
+from review_grade.reviewer import REVIEWER_MODEL, ProviderError
 
 _STALE_AFTER = timedelta(minutes=3)
 _POLL_SECONDS = 0.02
@@ -57,11 +58,11 @@ def _fixture_bad(_diff: str) -> str:
     return "4 of 6"
 
 
-def _live_review(diff: str) -> object:
+def _live_review(diff: str, attempt_usages: list | None = None) -> object:
     from review_grade.reviewer import review_diff
     from review_grade.rubric import assemble_prompt
 
-    return review_diff(assemble_prompt(diff))
+    return review_diff(assemble_prompt(diff), attempt_usages=attempt_usages)
 
 
 def settle_one(store: Store, review) -> bool:
@@ -70,42 +71,80 @@ def settle_one(store: Store, review) -> bool:
     if row is None:
         return False
     run_id = str(row["id"])
+    user_id = int(row["user_id"])
+    usages: list[AttemptUsage] = []
+    charged = False
     try:
-        outcome = _judge(row, review)
+        outcome = _judge(row, review, usages)
         if isinstance(outcome, _Done):
-            store.mark_done(
+            result = store.mark_done(
                 run_id,
                 token,
-                int(row["user_id"]),
+                user_id,
                 outcome.findings,
                 outcome.cost,
                 outcome.partial,
                 outcome.omitted_json,
             )
+            charged = result == "done"
         else:
             store.mark_failed(run_id, token)
+            charged = False
     except Exception:
         store.mark_failed(run_id, token)
+        charged = False
+        if not usages:
+            usages.append(
+                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
+            )
+    if usages:
+        record_review_cost(
+            store,
+            run_id=run_id,
+            account=user_id,
+            usages=usages,
+            charged=charged,
+        )
     return True
 
 
-def _judge(row, review) -> _Done | None:
+def _judge(row, review, usages: list[AttemptUsage]) -> _Done | None:
     if _expired(str(row["created_at"]), datetime.now(timezone.utc)):
         return None
     diff = row["diff_text"]
     if not isinstance(diff, str):
         return None
     try:
-        payload = review(diff)
+        payload = _call_review(review, diff, usages)
     except ProviderError:
+        if not usages:
+            usages.append(
+                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
+            )
         return None
     findings = _as_findings(payload)
     if findings is None:
+        if not usages:
+            usages.append(
+                AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
+            )
         return None
+    if not usages:
+        usages.append(
+            AttemptUsage(model=REVIEWER_MODEL, input_tokens=0, output_tokens=0)
+        )
     pending = row["omitted_pending"]
     if pending is None:
         return _Done(findings, project_cost(diff), False, None)
     return _Done(findings, project_cost(diff), True, str(pending))
+
+
+def _call_review(review, diff: str, usages: list[AttemptUsage]):
+    """Prefer reviewers that accept attempt_usages; fixtures take only the diff."""
+    try:
+        return review(diff, attempt_usages=usages)
+    except TypeError:
+        return review(diff)
 
 
 def _expired(created_at: str, now: datetime) -> bool:

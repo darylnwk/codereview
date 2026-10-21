@@ -174,26 +174,70 @@ def review_diff_claude(
     return parse_claude_stdout(stdout)
 
 
-def review_diff(prompt: str, *, model: str = REVIEWER_MODEL, timeout_s: int = 300) -> object:
+def review_diff(
+    prompt: str,
+    *,
+    model: str = REVIEWER_MODEL,
+    timeout_s: int = 300,
+    attempt_usages: list | None = None,
+) -> object:
     """Send prefix-plus-diff to the reviewer and return the findings object.
 
     One retry covers a transient non-json reply. The prompt is unchanged.
+    Each provider call appends an AttemptUsage to attempt_usages when given,
+    including failed attempts whose cost we absorb.
     """
     if not isinstance(prompt, str) or prompt == "":
         raise ProviderError("empty prompt")
     last: ProviderError | None = None
     for _attempt in range(2):
         try:
-            return _review_diff_once(prompt, model=model, timeout_s=timeout_s)
+            payload, usage = _review_diff_once(prompt, model=model, timeout_s=timeout_s)
+            if attempt_usages is not None:
+                attempt_usages.append(usage)
+            return payload
         except CredentialError:
             raise
         except ProviderError as exc:
+            if attempt_usages is not None:
+                attempt_usages.append(
+                    _attempt_usage(model, input_tokens=0, output_tokens=0)
+                )
             last = exc
     assert last is not None
     raise last
 
 
-def _review_diff_once(prompt: str, *, model: str, timeout_s: int) -> object:
+def _attempt_usage(model: str, *, input_tokens: int, output_tokens: int):
+    from review_grade.api.review_cost import AttemptUsage
+
+    return AttemptUsage(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def _usage_from_cli_body(body: object, *, model: str):
+    """Pull token counts from a CLI JSON envelope when the provider reports them."""
+    if not isinstance(body, dict):
+        return _attempt_usage(model, input_tokens=0, output_tokens=0)
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return _attempt_usage(model, input_tokens=0, output_tokens=0)
+    input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+    output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+    try:
+        return _attempt_usage(
+            model,
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+        )
+    except (TypeError, ValueError):
+        return _attempt_usage(model, input_tokens=0, output_tokens=0)
+
+
+def _review_diff_once(prompt: str, *, model: str, timeout_s: int) -> tuple[object, object]:
     handle = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".txt", delete=False
     )
@@ -238,4 +282,11 @@ def _review_diff_once(prompt: str, *, model: str, timeout_s: int) -> object:
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "reviewer failed").strip()
         raise ProviderError(detail)
-    return parse_reviewer_stdout(proc.stdout)
+    usage = _attempt_usage(model, input_tokens=0, output_tokens=0)
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        envelope = None
+    else:
+        usage = _usage_from_cli_body(envelope, model=model)
+    return parse_reviewer_stdout(proc.stdout), usage

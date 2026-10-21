@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE UNIQUE INDEX IF NOT EXISTS runs_user_idempotency
     ON runs(user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS review_costs (
+    run_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    attempts_json TEXT NOT NULL,
+    total_cost_usd REAL NOT NULL,
+    charged INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -233,6 +241,61 @@ class Store:
                 )
                 == 1
             )
+
+    def save_review_cost(self, record) -> None:
+        """Store internal provider cost for one review. Not exposed on GET /v1/runs."""
+        with self.transaction():
+            self._conn.execute(
+                """
+                INSERT INTO review_costs (
+                    run_id, user_id, attempts_json, total_cost_usd, charged, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    attempts_json = excluded.attempts_json,
+                    total_cost_usd = excluded.total_cost_usd,
+                    charged = excluded.charged,
+                    created_at = excluded.created_at
+                """,
+                (
+                    record.run_id,
+                    int(record.account),
+                    json.dumps(
+                        [
+                            {
+                                "model": attempt.model,
+                                "input_tokens": attempt.input_tokens,
+                                "output_tokens": attempt.output_tokens,
+                                "cost_usd": attempt.cost_usd,
+                            }
+                            for attempt in record.attempts
+                        ]
+                    ),
+                    float(record.total_cost_usd),
+                    1 if record.charged else 0,
+                    format_time(datetime.now(timezone.utc)),
+                ),
+            )
+
+    def get_review_cost(self, run_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT run_id, user_id, attempts_json, total_cost_usd, charged
+                FROM review_costs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "run_id": str(row["run_id"]),
+                "account": int(row["user_id"]),
+                "attempts": json.loads(row["attempts_json"]),
+                "total_cost_usd": float(row["total_cost_usd"]),
+                "charged": bool(row["charged"]),
+            }
 
     def mark_done(
         self,
