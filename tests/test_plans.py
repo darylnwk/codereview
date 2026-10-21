@@ -232,14 +232,18 @@ class PlanMathTests(unittest.TestCase):
         )
 
     def test_trial_ends_at_same_day_clamped(self) -> None:
+        # Normalized to 00:00 UTC so trial end matches the period boundary.
         card = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(card), datetime(2026, 11, 21, 15, 30, tzinfo=UTC))
+        self.assertEqual(trial_ends_at(card), datetime(2026, 11, 21, 0, 0, tzinfo=UTC))
         jan31 = datetime(2026, 1, 31, 10, 0, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(jan31), datetime(2026, 2, 28, 10, 0, tzinfo=UTC))
+        self.assertEqual(trial_ends_at(jan31), datetime(2026, 2, 28, 0, 0, tzinfo=UTC))
         leap = datetime(2024, 1, 31, 10, 0, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(leap), datetime(2024, 2, 29, 10, 0, tzinfo=UTC))
+        self.assertEqual(trial_ends_at(leap), datetime(2024, 2, 29, 0, 0, tzinfo=UTC))
         mar31 = datetime(2026, 3, 31, 8, 0, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(mar31), datetime(2026, 4, 30, 8, 0, tzinfo=UTC))
+        self.assertEqual(trial_ends_at(mar31), datetime(2026, 4, 30, 0, 0, tzinfo=UTC))
+        # Year wrap (mutant that keeps the year would survive without this).
+        dec31 = datetime(2026, 12, 31, 12, 0, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(dec31), datetime(2027, 1, 31, 0, 0, tzinfo=UTC))
 
     def test_cap_reached_copy_templates(self) -> None:
         self.assertEqual(
@@ -600,6 +604,85 @@ class PlanStoreAndApiTests(unittest.TestCase):
         now = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
         self.assertEqual(store.billing(auth.user_id, now=now).period_reviews, 0)
         self.assertTrue(allow_next_review(DEVELOPER, 0, 0))
+
+    def test_period_reviews_reset_on_anchor_day(self) -> None:
+        """Runs before the anchor day are outside the current period.
+
+        Mutant that drops ``anchor_day`` in ``Store._billing`` (always day 1)
+        would count both Oct 15 and Oct 22 when asked on Oct 22.
+        """
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        key = store.seed_account(0)
+        auth = store.authenticate(key)
+        assert auth is not None
+        store.set_billing(auth.user_id, billing_anchor_day=21)
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=1,
+            created_at=format_time(datetime(2026, 10, 15, 12, 0, tzinfo=UTC)),
+        )
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=1,
+            created_at=format_time(datetime(2026, 10, 22, 12, 0, tzinfo=UTC)),
+        )
+        on_22 = datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
+        billing = store.billing(auth.user_id, now=on_22)
+        self.assertEqual(billing.billing_anchor_day, 21)
+        self.assertEqual(billing.period_reviews, 1)
+
+    def test_cap_reached_message_reset_date_uses_anchor(self) -> None:
+        """Cap-set refusal names the next anchor boundary, not day 1."""
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        secret = store.seed_account(0)
+        auth = store.authenticate(secret)
+        assert auth is not None
+        store.set_billing(
+            auth.user_id,
+            monthly_cap_cents=0,
+            billing_anchor_day=21,
+        )
+        # Past included so the next accept is refused at cap $0… then raise cap.
+        when = format_time(datetime(2026, 10, 20, 12, 0, tzinfo=UTC))
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=250,
+            created_at=when,
+        )
+        store.set_billing(auth.user_id, monthly_cap_cents=15)  # one extra at $0.15
+        # Spend the single extra so the following accept hits the set-cap message.
+        store.insert_queued(
+            user_id=auth.user_id,
+            key_id=auth.id,
+            diff_hash="e" * 64,
+            diff_text=_added("extra.py", 1, "e"),
+            source="api",
+            idempotency_key=None,
+            created_at=when,
+        )
+        http_api.clock = lambda: datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+        self.addCleanup(lambda: setattr(http_api, "clock", None))
+        status, body = http_api.accept_review(
+            store,
+            secret,
+            None,
+            json.dumps({"diff": _added("over.py", 1, "o")}).encode("utf-8"),
+        )
+        self.assertEqual(status, 402)
+        self.assertEqual(body["error"], "cap_reached")
+        self.assertEqual(
+            body["message"],
+            "You’ve reached your $0.15 monthly spending cap for extra reviews. "
+            "Raise your cap to keep reviewing, or wait until 21 Oct 2026.",
+        )
 
     def test_queued_reserves_cap_slot(self) -> None:
         store = Store(self.db)

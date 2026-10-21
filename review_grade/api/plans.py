@@ -108,14 +108,16 @@ def add_one_month(moment: datetime, *, anchor_day: int | None = None) -> datetim
 
 
 def trial_ends_at(card_on_file_at: datetime) -> datetime:
-    """First instant after the free trial.
+    """First instant after the free trial (00:00 UTC on the end day).
 
     One month from the day the card is added, same day-of-month, clamped at
-    month end (21 Oct → 21 Nov; 31 Jan → 28/29 Feb; 31 Mar → 30 Apr). When
+    month end (21 Oct → 21 Nov; 31 Jan → 28/29 Feb; 31 Mar → 30 Apr). Normalized
+    to midnight UTC so trial end and the billing-period boundary agree. When
     wiring Stripe, set ``trial_end`` to this instant rather than a fixed day
     count. Billing periods use the same anchor day.
     """
-    return add_one_month(_as_utc(card_on_file_at))
+    ended = add_one_month(_as_utc(card_on_file_at))
+    return ended.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def billing_period_start(

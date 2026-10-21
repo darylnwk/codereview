@@ -35,9 +35,17 @@ from review_grade.api.plans import (
 )
 from review_grade.api.store import Billing, Key, Store, format_time
 
-# Test-only hook: runs after a successful cap check and before insert_queued.
-# Production leaves this None.
+# Test-only hooks. Production leaves these None.
 after_cap_check: Callable[[], None] | None = None
+# Override wall clock for period/cap message tests.
+clock: Callable[[], datetime] | None = None
+
+
+def _wall_now() -> datetime:
+    hook = clock
+    if hook is not None:
+        return hook()
+    return datetime.now(timezone.utc)
 
 
 class ReviewServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -114,10 +122,14 @@ def _queue_if_under_cap(
     Caller must already hold ``store.transaction()`` so the check and insert
     are one SQLite CRITICAL section (BEGIN IMMEDIATE).
     """
-    billing = store.billing(key.user_id)
+    now = _wall_now()
+    billing = store.billing(key.user_id, now=now)
     plan = get_plan(billing.plan)
     if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_cents):
-        denied = refuse("cap_reached", message=_cap_reached_message(plan, billing))
+        denied = refuse(
+            "cap_reached",
+            message=_cap_reached_message(plan, billing, now=now),
+        )
         return denied.status, _error_body(denied)
     hook = after_cap_check
     if hook is not None:

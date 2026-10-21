@@ -28,6 +28,7 @@ _USER_COLUMNS = (
         "monthly_cap_cents",
         f"INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)}",
     ),
+    # TODO: set billing_anchor_day from card-add date when Stripe is wired.
     ("billing_anchor_day", "INTEGER NOT NULL DEFAULT 1"),
 )
 
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id TEXT,
     plan TEXT NOT NULL DEFAULT 'developer',
     monthly_cap_cents INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)},
-    billing_anchor_day INTEGER NOT NULL DEFAULT 1
+    billing_anchor_day INTEGER NOT NULL DEFAULT 1  -- TODO: set from card-add date when Stripe is wired
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY,
@@ -363,6 +364,7 @@ class Store:
         return int(row["id"])
 
     def _insert_user(self, email: str, credits: int) -> int:
+        # TODO: set billing_anchor_day from card-add date when Stripe is wired.
         cursor = self._conn.execute(
             """
             INSERT INTO users (
