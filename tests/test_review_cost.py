@@ -19,6 +19,7 @@ from review_grade.api.review_cost import (
     AttemptCost,
     AttemptUsage,
     ReviewCostRecord,
+    attempt_cost_usd,
     build_attempt,
     build_review_cost,
     known_usage,
@@ -665,6 +666,19 @@ class KnownUsageValidationTests(unittest.TestCase):
 
 
 class ProductionPricingMapTests(unittest.TestCase):
+    # Exact base (input, output) $/MTok list-price estimates. Pinning both
+    # sides kills swap and 1e6-scale mutants that presence-only checks miss.
+    _EXPECTED_BASE_RATES = {
+        "grok-4.7-build-fast": (4.0, 12.0),
+        "claude-sonnet-5-5": (2.0, 10.0),
+        "claude-haiku-4-5-20251001": (1.0, 5.0),
+    }
+    _EXPECTED_ONE_MTOK_EACH = {
+        "grok-4.7-build-fast": 16.0,
+        "claude-sonnet-5-5": 12.0,
+        "claude-haiku-4-5-20251001": 6.0,
+    }
+
     def test_every_configured_model_is_priced_or_explicitly_unknown(self) -> None:
         self.assertIsInstance(UNKNOWN_PRICING, frozenset)
         for model in UNKNOWN_PRICING:
@@ -685,12 +699,18 @@ class ProductionPricingMapTests(unittest.TestCase):
                 self.assertGreater(rates["output_usd_per_mtok"], 0.0)
                 self.assertFalse(str(rates["source"]).startswith("TODO:"))
                 self.assertIn("2026-10-21", rates["source"])
+                self.assertIn("list-price estimate", rates["source"])
+                # Stay under Grok's long-prompt threshold so base rates apply.
                 priced = build_attempt(
-                    known_usage(model, input_tokens=1_000_000, output_tokens=0),
+                    known_usage(model, input_tokens=100_000, output_tokens=0),
                     pricing=MODEL_PRICING,
                 )
                 self.assertTrue(priced.priced)
-                self.assertEqual(priced.cost_usd, rates["input_usd_per_mtok"])
+                self.assertAlmostEqual(
+                    priced.cost_usd,
+                    rates["input_usd_per_mtok"] * 0.1,
+                    places=12,
+                )
 
     def test_reviewer_models_are_present_in_pricing_map(self) -> None:
         from review_grade.reviewer import HAIKU_MODEL, REVIEWER_MODEL, SONNET_MODEL
@@ -699,7 +719,93 @@ class ProductionPricingMapTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIn(model, MODEL_PRICING)
 
+    def test_exact_base_rates_and_one_mtok_in_out_totals(self) -> None:
+        """Pin exact (input, output) $/MTok and 1M-in+1M-out totals from base rates."""
+        self.assertEqual(set(self._EXPECTED_BASE_RATES), set(MODEL_PRICING) - UNKNOWN_PRICING)
+        for model, (want_in, want_out) in self._EXPECTED_BASE_RATES.items():
+            with self.subTest(model=model):
+                rates = MODEL_PRICING[model]
+                # Exact pair pin: survives only if input/output are not swapped
+                # and not scaled by 1e6.
+                self.assertEqual(
+                    (rates["input_usd_per_mtok"], rates["output_usd_per_mtok"]),
+                    (want_in, want_out),
+                )
+                self.assertNotEqual(
+                    (rates["input_usd_per_mtok"], rates["output_usd_per_mtok"]),
+                    (want_out, want_in),
+                )
+                self.assertNotEqual(
+                    (rates["input_usd_per_mtok"], rates["output_usd_per_mtok"]),
+                    (want_in * 1e6, want_out * 1e6),
+                )
+                # Direct base-rate total for 1M in + 1M out (ignores long-prompt tier).
+                total = attempt_cost_usd(
+                    input_tokens=1_000_000,
+                    output_tokens=1_000_000,
+                    input_usd_per_mtok=rates["input_usd_per_mtok"],
+                    output_usd_per_mtok=rates["output_usd_per_mtok"],
+                )
+                self.assertEqual(total, self._EXPECTED_ONE_MTOK_EACH[model])
+                self.assertEqual(total, want_in + want_out)
+                # Asymmetric tokens: swapped rates change the dollar total.
+                asymmetric = attempt_cost_usd(
+                    input_tokens=2_000_000,
+                    output_tokens=1_000_000,
+                    input_usd_per_mtok=want_in,
+                    output_usd_per_mtok=want_out,
+                )
+                swapped = attempt_cost_usd(
+                    input_tokens=2_000_000,
+                    output_tokens=1_000_000,
+                    input_usd_per_mtok=want_out,
+                    output_usd_per_mtok=want_in,
+                )
+                self.assertEqual(asymmetric, 2.0 * want_in + want_out)
+                self.assertNotEqual(asymmetric, swapped)
+                scaled = attempt_cost_usd(
+                    input_tokens=1_000_000,
+                    output_tokens=1_000_000,
+                    input_usd_per_mtok=want_in * 1e6,
+                    output_usd_per_mtok=want_out * 1e6,
+                )
+                self.assertNotEqual(scaled, self._EXPECTED_ONE_MTOK_EACH[model])
+
+    def test_grok_long_prompt_tier_when_input_over_200k(self) -> None:
+        """Grok 4.7 Fast list price: input >200k → $6/$18 per MTok."""
+        rates = MODEL_PRICING["grok-4.7-build-fast"]
+        self.assertEqual(rates["long_prompt_after_input_tokens"], 200_000)
+        self.assertEqual(rates["long_prompt_input_usd_per_mtok"], 6.0)
+        self.assertEqual(rates["long_prompt_output_usd_per_mtok"], 18.0)
+
+        short = build_attempt(
+            known_usage("grok-4.7-build-fast", input_tokens=200_000, output_tokens=1_000_000),
+            pricing=MODEL_PRICING,
+        )
+        self.assertTrue(short.priced)
+        self.assertEqual(short.cost_usd, 4.0 * 0.2 + 12.0)
+
+        long = build_attempt(
+            known_usage("grok-4.7-build-fast", input_tokens=200_001, output_tokens=1_000_000),
+            pricing=MODEL_PRICING,
+        )
+        self.assertTrue(long.priced)
+        self.assertAlmostEqual(long.cost_usd, 6.0 * 200_001 / 1_000_000 + 18.0, places=12)
+        self.assertNotEqual(long.cost_usd, short.cost_usd)
+
+        both_long = build_attempt(
+            known_usage(
+                "grok-4.7-build-fast",
+                input_tokens=1_000_000,
+                output_tokens=1_000_000,
+            ),
+            pricing=MODEL_PRICING,
+        )
+        self.assertEqual(both_long.cost_usd, 24.0)
+        self.assertNotEqual(both_long.cost_usd, 16.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

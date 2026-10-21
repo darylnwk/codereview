@@ -1,14 +1,16 @@
 """Per-model token prices for internal review cost logging.
 
-Rates are USD per 1,000,000 tokens from official provider or Vercel AI
-Gateway pricing pages (accessed 2026-10-21). None means unknown — see
-UNKNOWN_PRICING. Cached-input rates are omitted: review_cost only prices
-input/output tokens, and the reviewer path does not log cache hits.
+Rates are list-price estimates (USD per 1,000,000 tokens) taken from
+public pricing pages (accessed 2026-10-21). They are not billed amounts:
+product calls go through the logged-in `grok` and `claude` CLIs, which
+bill via those plans. None means unknown — see UNKNOWN_PRICING.
+Cached-input rates are omitted: review_cost only prices input/output
+tokens, and the reviewer path does not log cache hits.
 """
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class ModelRates(TypedDict):
@@ -16,6 +18,11 @@ class ModelRates(TypedDict):
     input_usd_per_mtok: float | None
     output_usd_per_mtok: float | None
     source: str
+    # Optional long-prompt tier: when input_tokens > long_prompt_after_input_tokens,
+    # use long_prompt_* rates instead of the base pair.
+    long_prompt_after_input_tokens: NotRequired[int]
+    long_prompt_input_usd_per_mtok: NotRequired[float]
+    long_prompt_output_usd_per_mtok: NotRequired[float]
 
 
 # Models that stay in MODEL_PRICING with None rates until an official page
@@ -30,26 +37,32 @@ UNKNOWN_PRICING: frozenset[str] = frozenset()
 MODEL_PRICING: dict[str, ModelRates] = {
     # Default product reviewer (review_grade/reviewer.py:15 REVIEWER_MODEL;
     # worker live path review_grade/api/worker.py:66-69 → review_diff default).
-    # Grok Build / Cursor Fast variant — not listed on Vercel AI Gateway;
-    # short-context (<200k prompt) Fast rates from xAI pricing.
+    # Maps to the page's "Grok 4.7 Fast" row (exact id not listed). Plan-billed
+    # via Grok Build; figures below are list-price estimates, not billed amounts.
+    # Base = short prompt (≤200k input); long_prompt_* when input_tokens > 200k.
     "grok-4.7-build-fast": {
-        "input_usd_per_mtok": 4.0,  # https://docs.x.ai/developers/pricing (Grok 4.7 Fast, <200k) accessed 2026-10-21
-        "output_usd_per_mtok": 12.0,  # https://docs.x.ai/developers/pricing (Grok 4.7 Fast, <200k) accessed 2026-10-21
-        "source": "https://docs.x.ai/developers/pricing (Grok 4.7 Fast) accessed 2026-10-21",
+        "input_usd_per_mtok": 4.0,  # list-price estimate: https://docs.x.ai/developers/pricing (Grok 4.7 Fast, ≤200k) accessed 2026-10-21
+        "output_usd_per_mtok": 12.0,  # list-price estimate: https://docs.x.ai/developers/pricing (Grok 4.7 Fast, ≤200k) accessed 2026-10-21
+        "long_prompt_after_input_tokens": 200_000,
+        "long_prompt_input_usd_per_mtok": 6.0,  # list-price estimate: https://docs.x.ai/developers/pricing (Grok 4.7 Fast, >200k) accessed 2026-10-21
+        "long_prompt_output_usd_per_mtok": 18.0,  # list-price estimate: https://docs.x.ai/developers/pricing (Grok 4.7 Fast, >200k) accessed 2026-10-21
+        "source": "list-price estimate https://docs.x.ai/developers/pricing (Grok 4.7 Fast; exact id not listed; Grok Build plan-billed) accessed 2026-10-21",
     },
     # Stress / Sonnet rerun only (review_grade/reviewer.py:17 SONNET_MODEL).
-    # Maps to anthropic/claude-sonnet-5.5 on Vercel AI Gateway.
+    # Called via the logged-in `claude` CLI. List-price estimate from the
+    # public model page (not a Vercel AI Gateway billed amount).
     "claude-sonnet-5-5": {
-        "input_usd_per_mtok": 2.0,  # https://vercel.com/ai-gateway/models/claude-sonnet-5.5 accessed 2026-10-21
-        "output_usd_per_mtok": 10.0,  # https://vercel.com/ai-gateway/models/claude-sonnet-5.5 accessed 2026-10-21
-        "source": "https://vercel.com/ai-gateway/models/claude-sonnet-5.5 accessed 2026-10-21",
+        "input_usd_per_mtok": 2.0,  # list-price estimate: https://vercel.com/ai-gateway/models/claude-sonnet-5.5 accessed 2026-10-21
+        "output_usd_per_mtok": 10.0,  # list-price estimate: https://vercel.com/ai-gateway/models/claude-sonnet-5.5 accessed 2026-10-21
+        "source": "list-price estimate https://vercel.com/ai-gateway/models/claude-sonnet-5.5 (claude CLI; not gateway-billed) accessed 2026-10-21",
     },
     # Haiku stress run only (review_grade/reviewer.py:19 HAIKU_MODEL).
-    # Maps to anthropic/claude-haiku-4.5 on Vercel AI Gateway.
+    # Called via the logged-in `claude` CLI. List-price estimate from the
+    # public model page (not a Vercel AI Gateway billed amount).
     "claude-haiku-4-5-20251001": {
-        "input_usd_per_mtok": 1.0,  # https://vercel.com/ai-gateway/models/claude-haiku-4.5 accessed 2026-10-21
-        "output_usd_per_mtok": 5.0,  # https://vercel.com/ai-gateway/models/claude-haiku-4.5 accessed 2026-10-21
-        "source": "https://vercel.com/ai-gateway/models/claude-haiku-4.5 accessed 2026-10-21",
+        "input_usd_per_mtok": 1.0,  # list-price estimate: https://vercel.com/ai-gateway/models/claude-haiku-4.5 accessed 2026-10-21
+        "output_usd_per_mtok": 5.0,  # list-price estimate: https://vercel.com/ai-gateway/models/claude-haiku-4.5 accessed 2026-10-21
+        "source": "list-price estimate https://vercel.com/ai-gateway/models/claude-haiku-4.5 (claude CLI; not gateway-billed) accessed 2026-10-21",
     },
 }
 
@@ -57,3 +70,22 @@ MODEL_PRICING: dict[str, ModelRates] = {
 def rates_for(model: str, pricing: dict[str, ModelRates] | None = None) -> ModelRates | None:
     table = MODEL_PRICING if pricing is None else pricing
     return table.get(model)
+
+
+def effective_mtok_rates(
+    rates: ModelRates,
+    *,
+    input_tokens: int,
+) -> tuple[float, float] | None:
+    """Base or long-prompt (input, output) $/MTok. None if either base rate is unset."""
+    input_rate = rates["input_usd_per_mtok"]
+    output_rate = rates["output_usd_per_mtok"]
+    if input_rate is None or output_rate is None:
+        return None
+    threshold = rates.get("long_prompt_after_input_tokens")
+    if threshold is not None and input_tokens > threshold:
+        long_in = rates.get("long_prompt_input_usd_per_mtok")
+        long_out = rates.get("long_prompt_output_usd_per_mtok")
+        if long_in is not None and long_out is not None:
+            return long_in, long_out
+    return input_rate, output_rate

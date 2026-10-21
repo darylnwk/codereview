@@ -14,7 +14,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from review_grade.api.model_pricing import MODEL_PRICING, ModelRates, rates_for
+from review_grade.api.model_pricing import (
+    MODEL_PRICING,
+    ModelRates,
+    effective_mtok_rates,
+    rates_for,
+)
 
 if TYPE_CHECKING:
     from review_grade.api.store import Store
@@ -116,9 +121,9 @@ def build_attempt(
             usage_known=True,
             priced=False,
         )
-    input_rate = rates["input_usd_per_mtok"]
-    output_rate = rates["output_usd_per_mtok"]
-    if input_rate is None or output_rate is None:
+    assert usage.input_tokens is not None and usage.output_tokens is not None
+    effective = effective_mtok_rates(rates, input_tokens=usage.input_tokens)
+    if effective is None:
         logger.warning(
             "model_pricing placeholder for %s (%s); attempt unpriced",
             usage.model,
@@ -132,7 +137,7 @@ def build_attempt(
             usage_known=True,
             priced=False,
         )
-    assert usage.input_tokens is not None and usage.output_tokens is not None
+    input_rate, output_rate = effective
     return AttemptCost(
         model=usage.model,
         input_tokens=usage.input_tokens,
