@@ -18,13 +18,18 @@ import json
 import os
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from review_grade.api.plans import PLANS, get_plan, trial_ends_at
 from review_grade.api.store import Store
-from review_grade.api.stripe_http import StripeClient, StripeError, refuse_live_secret_key
+from review_grade.api.stripe_http import (
+    LiveModeRefused,
+    StripeClient,
+    StripeError,
+    refuse_live_secret_key,
+)
 
 # Env var names (values never set by this package; see docs/stripe-env.md).
 ENV_SECRET_KEY = "STRIPE_SECRET_KEY"
@@ -53,8 +58,8 @@ class StripePriceMismatch(ValueError):
 
 @dataclass(frozen=True)
 class StripeEnv:
-    secret_key: str
-    webhook_secret: str
+    secret_key: str = field(repr=False)
+    webhook_secret: str = field(repr=False)
     price_developer: str
     price_fleet: str
     success_url: str
@@ -81,6 +86,10 @@ def load_stripe_env(environ: dict[str, str] | None = None) -> StripeEnv | None:
         ENV_SUCCESS_URL,
         ENV_CANCEL_URL,
     )
+    raw_secret = env.get(ENV_SECRET_KEY, "")
+    # Leading/trailing whitespace must not turn a padded key into a TEST key.
+    if raw_secret != raw_secret.strip():
+        raise LiveModeRefused()
     values = {name: env.get(name, "").strip() for name in names}
     if any(not values[name] for name in names):
         return None
@@ -124,7 +133,7 @@ def validate_configured_prices(
             raise StripePriceMismatch(
                 f"{env_name} price {price_id!r} could not be fetched for plan "
                 f"{plan_id!r}: {detail}"
-            ) from exc
+            ) from None
         if not isinstance(price, Mapping):
             raise StripePriceMismatch(
                 f"{env_name} price {price_id!r} for plan {plan_id!r} returned "

@@ -12,6 +12,7 @@ import logging
 import os
 import sqlite3
 import tempfile
+import traceback
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -681,18 +682,23 @@ class EnvLoaderTests(unittest.TestCase):
                 with self.assertRaises(LiveModeRefused):
                     StripeClient(key)
                 if key:
-                    # load_stripe_env strips; leading-space keys become allowed after strip.
-                    stripped = key.strip()
-                    if stripped.startswith(("sk_test_", "rk_test_")):
-                        loaded = load_stripe_env(_full_stripe_env(key))
-                        assert loaded is not None
-                        self.assertEqual(loaded.secret_key, stripped)
-                    else:
-                        with self.assertRaises(LiveModeRefused):
-                            load_stripe_env(_full_stripe_env(key))
+                    with self.assertRaises(LiveModeRefused):
+                        load_stripe_env(_full_stripe_env(key))
                 else:
                     # Empty STRIPE_SECRET_KEY is treated as unset (incomplete env).
                     self.assertIsNone(load_stripe_env(_full_stripe_env("")))
+
+    def test_whitespace_padded_secret_keys_refused_via_load(self) -> None:
+        cases = (
+            ("leading", " sk_test_X"),
+            ("trailing", "sk_test_X "),
+            ("both", " sk_test_X "),
+            ("leading_rk", " rk_test_x"),
+        )
+        for label, key in cases:
+            with self.subTest(label=label):
+                with self.assertRaises(LiveModeRefused):
+                    load_stripe_env(_full_stripe_env(key))
 
     def test_refused_key_value_never_appears_in_error(self) -> None:
         unique = "sk_live_NEVER_ECHO_THIS_UNIQUE_SUFFIX_9f3a"
@@ -704,6 +710,19 @@ class EnvLoaderTests(unittest.TestCase):
         with self.assertRaises(LiveModeRefused) as client_ctx:
             StripeClient(unique)
         self.assertNotIn(unique, str(client_ctx.exception))
+
+    def test_stripe_env_repr_hides_secrets(self) -> None:
+        secret = "sk_test_REPR_SECRET_VALUE_aa11"
+        webhook = "whsec_REPR_WEBHOOK_VALUE_bb22"
+        env_map = _full_stripe_env(secret)
+        env_map[ENV_WEBHOOK_SECRET] = webhook
+        loaded = load_stripe_env(env_map)
+        assert loaded is not None
+        text = repr(loaded)
+        self.assertNotIn(secret, text)
+        self.assertNotIn(webhook, text)
+        self.assertNotIn("REPR_SECRET", text)
+        self.assertNotIn("REPR_WEBHOOK", text)
 
 
 class ConfiguredPriceValidationTests(unittest.TestCase):
@@ -874,6 +893,32 @@ class MainStartupValidationTests(unittest.TestCase):
         self.assertNotIn(unique, log_capture.getvalue())
         bind_mock.assert_not_called()
 
+    def test_401_body_tag_absent_from_startup_traceback(self) -> None:
+        tag = "FAKE_KEY_TAG_IN_401_BODY_9f3a"
+        env = _full_stripe_env("sk_test_traceback_401")
+        bind_mock = mock.Mock()
+        client = mock.Mock()
+        client.retrieve_price.side_effect = StripeError(
+            401, {"error": {"message": f"Unauthorized {tag}"}}
+        )
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("review_grade.api.__main__.StripeClient", return_value=client):
+                with mock.patch("review_grade.api.__main__.bind", bind_mock):
+                    with self.assertRaises(StripePriceMismatch) as ctx:
+                        api_main(list(self._ARGV))
+        formatted = "".join(
+            traceback.format_exception(
+                type(ctx.exception), ctx.exception, ctx.exception.__traceback__
+            )
+        )
+        self.assertNotIn(tag, formatted)
+        self.assertNotIn(tag, str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)
+        err = StripeError(401, {"error": {"message": tag}})
+        self.assertNotIn(tag, str(err))
+        self.assertEqual(err.body, {"error": {"message": tag}})
+        bind_mock.assert_not_called()
+
 
 class StripeHttpFormTests(unittest.TestCase):
     def test_client_raises_on_error_status(self) -> None:
@@ -883,8 +928,11 @@ class StripeHttpFormTests(unittest.TestCase):
             return 401, b'{"error":{"message":"no"}}'
 
         client = StripeClient("sk_test_x", transport=boom)
-        with self.assertRaises(StripeError):
+        with self.assertRaises(StripeError) as ctx:
             client.request("GET", "/v1/customers/cus_x")
+        self.assertEqual(ctx.exception.status, 401)
+        self.assertNotIn("no", str(ctx.exception))
+        self.assertEqual(ctx.exception.body, {"error": {"message": "no"}})
 
 
 if __name__ == "__main__":

@@ -21,7 +21,8 @@ class StripeError(Exception):
     def __init__(self, status: int, body: object) -> None:
         self.status = status
         self.body = body
-        super().__init__(f"Stripe HTTP {status}: {body!r}")
+        # Message is status-only so tracebacks never echo response bodies.
+        super().__init__(f"Stripe HTTP {status}")
 
 
 # Only TEST-mode secret/restricted keys. Live, publishable, empty, and garbage are refused.
