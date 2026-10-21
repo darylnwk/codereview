@@ -22,7 +22,7 @@ Pricing decided by Daryl, 21 Oct 2026. No annual pricing. The old per-email free
 
 | Offer | Price | What they get |
 | --- | --- | --- |
-| Trial | 1 calendar month free | On **all** tiers. Starts when the user adds a card through Stripe. Aligned with the billing calendar month (UTC for now), not a fixed 30-day count. Billing starts after that month unless cancelled |
+| Trial | 1 month free | On **all** tiers. Starts when the user adds a card through Stripe. Ends one month later on the same day-of-month, clamped at month end (21 Oct → 21 Nov; 31 Jan → 28/29 Feb). That day is the billing-period anchor. Billing starts after that month unless cancelled |
 | Developer | $25 / month | 250 reviews included, then $0.15 per extra review. User-set monthly cap on extras (default **$0** — no overage until they set a cap) |
 | Fleet | $199 / month | 2,500 reviews included, then $0.06 per extra review. User-set monthly cap on extras (default **$0**) |
 
@@ -82,8 +82,8 @@ Shown when the run is `done`. The page polls. The request does not wait on the m
 ### Auth and money
 
 - Magic link. Email in, link in, session cookie.
-- Stripe Checkout: card on file starts the one calendar-month free trial on the chosen tier (Developer or Fleet). Align Stripe `trial_end` with that calendar-month boundary (not `trial_period_days=30`). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0).
-- Account row: email, credits (legacy), plan, monthly cap, Stripe customer id.
+- Stripe Checkout: card on file starts the one-month free trial on the chosen tier (Developer or Fleet). Set Stripe `trial_end` to the same day-of-month one month later, clamped (not `trial_period_days=30`). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0). Cap is stored as integer cents.
+- Account row: email, credits (legacy), plan, monthly_cap_cents, billing_anchor_day, Stripe customer id.
 
 ### What the UI will not have in v1
 
@@ -104,10 +104,10 @@ A website submit and an API submit write the same `runs` row. `source` is `web`,
 POST /v1/reviews        body: { diff, files?, source? }
                         202 { run_id } after key, credit, and size checks
 GET  /v1/runs/:id       { status, findings, partial, omitted, cost_usd }
-GET  /v1/me             { credits }
+GET  /v1/me             { reviews_left }
 ```
 
-`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not count toward the period. Accept reserves a period slot in the same transaction as the queued insert (cap check). Finish flips to `done` without touching `credits`. A second GET of a done run returns the same findings. If the process dies before finish, the run stays queued, and the restarted worker finishes once.
+`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not count toward the period. Accept reserves a period slot in the same transaction as the queued insert (cap check). Finish flips to `done` without touching `credits`. A second GET of a done run returns the same findings. If the process dies before finish, the run stays queued, and the restarted worker finishes once. `reviews_left` is included reviews still unused in the current period.
 
 When the body includes `files`, a done run sets `partial` true and `omitted` to the paths that were not selected. A done review of the full diff sets `partial` false and `omitted` to an empty list. A queued GET keeps `partial` false and `omitted` [] until the run is done.
 
@@ -200,16 +200,16 @@ Kill gate, before Stripe:
 1. Benchmark subset and kill-gate number. Locally passed 21 Oct 2026 (Daryl); still blocks Stripe until CI-verified if you want that bar.
 2. Reviewer worker, async run row, size check, cache logging.
 3. Three screens against the same review function.
-4. API keys + Stripe card-on-file calendar-month trial on Developer and Fleet, Action snippet.
+4. API keys + Stripe card-on-file day-of-month trial on Developer and Fleet, Action snippet.
 5. Ten users. Five of ten run a second review unprompted: add the shared team balance. Else stop.
 
 ## Tables
 
-- `users(email, credits, stripe_customer_id, plan, monthly_cap_usd)` — `credits` is legacy; default `monthly_cap_usd` is 0
+- `users(email, credits, stripe_customer_id, plan, monthly_cap_cents, billing_anchor_day)` — `credits` is legacy; default `monthly_cap_cents` is 0; legacy `monthly_cap_usd` if present is migrated ×100 and kept
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
 
-Included reviews and the overage cap are counted per billing period from `runs`: `queued` + `done` since period start. Failed runs never count. Period start is the calendar month in UTC for now; it will follow Stripe's subscription billing anchor later. Accept checks the count and inserts the queued row in one transaction so concurrent accepts cannot overrun the cap.
+Included reviews and the overage cap are counted per billing period from `runs`: `queued` + `done` since period start. Failed runs never count. Period boundaries follow `billing_anchor_day` (card-on-file day, clamped). Accept checks the count and inserts the queued row in one transaction so concurrent accepts cannot overrun the cap.
 
 `cache_read` and `cache_write` are columns on `runs`. They stay null. `review_diff` does not return token counts, and a fixture run does not invent them. `omitted` lists paths left out when the request included `files`. A queued GET leaves it empty.
 

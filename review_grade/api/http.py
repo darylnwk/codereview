@@ -18,13 +18,22 @@ from review_grade.api.gate import (
     PostOp,
     Refused,
     Replay,
-    ShowCredits,
+    ShowMe,
     ShowRun,
     decide,
     refuse,
 )
-from review_grade.api.plans import allow_next_review, get_plan
-from review_grade.api.store import Key, Store, format_time
+from review_grade.api.plans import (
+    CAP_REACHED_SET,
+    CAP_REACHED_ZERO,
+    allow_next_review,
+    format_cap_label,
+    format_reset_date,
+    get_plan,
+    next_billing_period_start,
+    reviews_left_this_period,
+)
+from review_grade.api.store import Billing, Key, Store, format_time
 
 # Test-only hook: runs after a successful cap check and before insert_queued.
 # Production leaves this None.
@@ -84,6 +93,16 @@ def _handler(store: Store):
     return Handler
 
 
+def _cap_reached_message(plan, billing: Billing, *, now: datetime | None = None) -> str:
+    if billing.monthly_cap_cents == 0:
+        return CAP_REACHED_ZERO.format(included=plan.included_reviews)
+    reset = next_billing_period_start(now, anchor_day=billing.billing_anchor_day)
+    return CAP_REACHED_SET.format(
+        cap=format_cap_label(billing.monthly_cap_cents),
+        reset_date=format_reset_date(reset),
+    )
+
+
 def _queue_if_under_cap(
     store: Store,
     key: Key,
@@ -97,8 +116,8 @@ def _queue_if_under_cap(
     """
     billing = store.billing(key.user_id)
     plan = get_plan(billing.plan)
-    if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
-        denied = refuse("cap_reached")
+    if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_cents):
+        denied = refuse("cap_reached", message=_cap_reached_message(plan, billing))
         return denied.status, _error_body(denied)
     hook = after_cap_check
     if hook is not None:
@@ -168,10 +187,13 @@ def accept_review(
 def read_me(store: Store, token: str | None) -> tuple[int, dict]:
     with store.transaction():
         key = store.authenticate(token) if token else None
-        credits = store.credits(key.user_id) if key is not None else 0
         decision = decide(GetMeOp(key_ok=key is not None))
-        if isinstance(decision, ShowCredits):
-            return decision.status, {"credits": credits}
+        if isinstance(decision, ShowMe):
+            assert key is not None
+            billing = store.billing(key.user_id)
+            plan = get_plan(billing.plan)
+            left = reviews_left_this_period(plan, billing.period_reviews)
+            return decision.status, {"reviews_left": left}
         return decision.status, _error_body(decision)
 
 

@@ -6,12 +6,12 @@ This repo is the agentic build: the review API, the internal recall benchmark, a
 
 ## Pricing (planned)
 
-- **Trial:** one calendar month free on all tiers after a Stripe card is on file (aligned with the billing period, not a fixed 30-day count); billing starts after that month unless cancelled.
+- **Trial:** first month free on all tiers after a Stripe card is on file (same day-of-month one month later, clamped at month end); billing starts after that month unless cancelled.
 - **Developer:** $25/month, 250 reviews included, then $0.15 per extra review (user-set monthly cap).
 - **Fleet:** $199/month, 2,500 reviews included, then $0.06 per extra review (user-set monthly cap).
 - No annual pricing. The old per-email free-review trial is gone.
-- Included/overage usage is counted per billing period from accepted and finished runs (failed never count). Period start is the calendar month UTC for now; later it will follow Stripe's billing anchor.
-- **Default monthly overage cap is $0** on every tier (Daryl, 21 Oct 2026) — no default overage. After included reviews, set a monthly cap to keep going.
+- Included/overage usage is counted per billing period from accepted and finished runs (failed never count). Period boundaries follow the card-on-file anchor day (clamped).
+- **Default monthly overage cap is $0** on every tier (Daryl, 21 Oct 2026) — no default overage. After included reviews, set a monthly spending cap to keep going.
 
 ## How to run
 

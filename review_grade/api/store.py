@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from review_grade.api.plans import DEFAULT_MONTHLY_CAP_USD, billing_period_start
+from review_grade.api.plans import DEFAULT_MONTHLY_CAP_CENTS, billing_period_start
 
 SEED_EMAIL = "seed@reviewgrade.dev"
 _LIVE_PREFIX = "ra_live_"
@@ -25,9 +25,10 @@ _RUN_COLUMNS = (
 _USER_COLUMNS = (
     ("plan", "TEXT NOT NULL DEFAULT 'developer'"),
     (
-        "monthly_cap_usd",
-        f"INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_USD)}",
+        "monthly_cap_cents",
+        f"INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)}",
     ),
+    ("billing_anchor_day", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 _SCHEMA = f"""
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS users (
     credits INTEGER NOT NULL,
     stripe_customer_id TEXT,
     plan TEXT NOT NULL DEFAULT 'developer',
-    monthly_cap_usd INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_USD)}
+    monthly_cap_cents INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)},
+    billing_anchor_day INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY,
@@ -99,9 +101,10 @@ class Key:
 @dataclass(frozen=True)
 class Billing:
     plan: str
-    monthly_cap_usd: int
+    monthly_cap_cents: int
     # queued + done in the current billing period (failed never count).
     period_reviews: int
+    billing_anchor_day: int = 1
 
 
 class Store:
@@ -131,9 +134,18 @@ class Store:
 
     def _ensure_user_columns(self) -> None:
         have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
+        added_cents = False
         for name, decl in _USER_COLUMNS:
             if name not in have:
                 self._conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
+                if name == "monthly_cap_cents":
+                    added_cents = True
+        have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
+        if added_cents and "monthly_cap_usd" in have:
+            # One-shot: preserve dollar values as cents. Leave monthly_cap_usd in place.
+            self._conn.execute(
+                "UPDATE users SET monthly_cap_cents = monthly_cap_usd * 100"
+            )
         self._drop_reviews_finished_column()
 
     def _drop_reviews_finished_column(self) -> None:
@@ -202,21 +214,31 @@ class Store:
         user_id: int,
         *,
         plan: str | None = None,
-        monthly_cap_usd: int | None = None,
+        monthly_cap_cents: int | None = None,
+        billing_anchor_day: int | None = None,
     ) -> None:
         with self.transaction():
             row = self._billing(user_id)
             next_plan = row.plan if plan is None else plan
-            next_cap = row.monthly_cap_usd if monthly_cap_usd is None else monthly_cap_usd
+            next_cap = row.monthly_cap_cents if monthly_cap_cents is None else monthly_cap_cents
+            next_anchor = (
+                row.billing_anchor_day if billing_anchor_day is None else billing_anchor_day
+            )
+            if not isinstance(next_cap, int) or isinstance(next_cap, bool):
+                raise TypeError("monthly_cap_cents must be an int")
             if next_cap < 0:
-                raise ValueError("monthly_cap_usd must be >= 0")
+                raise ValueError("monthly_cap_cents must be >= 0")
+            if not isinstance(next_anchor, int) or isinstance(next_anchor, bool):
+                raise TypeError("billing_anchor_day must be an int")
+            if not 1 <= next_anchor <= 31:
+                raise ValueError("billing_anchor_day must be in 1..31")
             self._conn.execute(
                 """
                 UPDATE users
-                SET plan = ?, monthly_cap_usd = ?
+                SET plan = ?, monthly_cap_cents = ?, billing_anchor_day = ?
                 WHERE id = ?
                 """,
-                (next_plan, next_cap, user_id),
+                (next_plan, next_cap, next_anchor, user_id),
             )
 
     def idempotent_run(self, user_id: int, key: str) -> tuple[str, str] | None:
@@ -344,10 +366,11 @@ class Store:
         cursor = self._conn.execute(
             """
             INSERT INTO users (
-                email, credits, stripe_customer_id, plan, monthly_cap_usd
-            ) VALUES (?, ?, NULL, 'developer', ?)
+                email, credits, stripe_customer_id, plan,
+                monthly_cap_cents, billing_anchor_day
+            ) VALUES (?, ?, NULL, 'developer', ?, 1)
             """,
-            (email, credits, int(DEFAULT_MONTHLY_CAP_USD)),
+            (email, credits, int(DEFAULT_MONTHLY_CAP_CENTS)),
         )
         return int(cursor.lastrowid)
 
@@ -399,14 +422,23 @@ class Store:
 
     def _billing(self, user_id: int, *, now: datetime | None = None) -> Billing:
         row = self._conn.execute(
-            "SELECT plan, monthly_cap_usd FROM users WHERE id = ?",
+            """
+            SELECT plan, monthly_cap_cents, billing_anchor_day
+            FROM users WHERE id = ?
+            """,
             (user_id,),
         ).fetchone()
         if row is None:
-            return Billing("developer", int(DEFAULT_MONTHLY_CAP_USD), 0)
-        since = format_time(billing_period_start(now))
+            return Billing("developer", int(DEFAULT_MONTHLY_CAP_CENTS), 0, 1)
+        anchor = int(row["billing_anchor_day"])
+        since = format_time(billing_period_start(now, anchor_day=anchor))
         period_reviews = self._count_period_reviews(user_id, since)
-        return Billing(str(row["plan"]), int(row["monthly_cap_usd"]), period_reviews)
+        return Billing(
+            str(row["plan"]),
+            int(row["monthly_cap_cents"]),
+            period_reviews,
+            anchor,
+        )
 
     def _count_period_reviews(self, user_id: int, since: str) -> int:
         """Billable in-period runs: accepted (queued) and done. Failed never count."""

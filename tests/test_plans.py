@@ -22,23 +22,29 @@ from datetime import UTC, datetime
 from review_grade.api import http as http_api
 from review_grade.api.plans import (
     ANNUAL_PRICING,
+    CAP_REACHED_SET,
+    CAP_REACHED_ZERO,
     DEFAULT_MONTHLY_CAP_CENTS,
     DEFAULT_MONTHLY_CAP_USD,
     DEVELOPER,
     FLEET,
     PLANS,
-    _cap_cents,
     allow_next_review,
     billing_period_start,
     charge_for_review,
     charge_for_review_cents,
+    format_cap_label,
+    format_reset_date,
     get_plan,
     has_legacy_trial_plan,
     monthly_spend_usd,
+    next_billing_period_start,
     overage_reviews,
     overage_spend_cents,
     overage_spend_usd,
+    reviews_left_this_period,
     trial_ends_at,
+    usd_to_cents,
     within_monthly_cap,
 )
 from review_grade.api.store import Store, format_time
@@ -173,39 +179,86 @@ class PlanMathTests(unittest.TestCase):
         self.assertFalse(allow_next_review(DEVELOPER, 250, 0))
         self.assertTrue(allow_next_review(FLEET, 2499, 0))
         self.assertFalse(allow_next_review(FLEET, 2500, 0))
-        # Cap $50 on Developer: 333 extras * 15¢ = 4995¢ <= 5000¢; 334th exceeds.
-        self.assertTrue(within_monthly_cap(DEVELOPER, 583, 50))
-        self.assertFalse(within_monthly_cap(DEVELOPER, 584, 50))
-        self.assertTrue(allow_next_review(DEVELOPER, 582, 50))
-        self.assertFalse(allow_next_review(DEVELOPER, 583, 50))
+        # Cap $50 = 5000¢ on Developer: 333 extras * 15¢ = 4995¢; 334th exceeds.
+        self.assertTrue(within_monthly_cap(DEVELOPER, 583, 5000))
+        self.assertFalse(within_monthly_cap(DEVELOPER, 584, 5000))
+        self.assertTrue(allow_next_review(DEVELOPER, 582, 5000))
+        self.assertFalse(allow_next_review(DEVELOPER, 583, 5000))
         # Fleet $0.06: 833 extras * 6¢ = 4998¢; 834th exceeds.
-        self.assertTrue(within_monthly_cap(FLEET, 3333, 50))
-        self.assertFalse(within_monthly_cap(FLEET, 3334, 50))
-        self.assertFalse(allow_next_review(FLEET, 3333, 50))
+        self.assertTrue(within_monthly_cap(FLEET, 3333, 5000))
+        self.assertFalse(within_monthly_cap(FLEET, 3334, 5000))
+        self.assertFalse(allow_next_review(FLEET, 3333, 5000))
 
-    def test_fractional_dollar_cap_uses_round(self) -> None:
+    def test_fractional_dollar_cap_as_cents(self) -> None:
         # $12.99 → 1299¢. Spend $12.15 = 81 extras * 15¢; that review is allowed.
-        # int(12.99)*100 == 1200 would wrongly refuse it (mutation target).
-        self.assertEqual(_cap_cents(12.99), 1299)
+        self.assertEqual(usd_to_cents(12.99), 1299)
         self.assertEqual(overage_spend_cents(DEVELOPER, 331), 1215)
-        self.assertTrue(within_monthly_cap(DEVELOPER, 331, 12.99))
-        self.assertTrue(allow_next_review(DEVELOPER, 330, 12.99))
+        self.assertTrue(within_monthly_cap(DEVELOPER, 331, 1299))
+        self.assertTrue(allow_next_review(DEVELOPER, 330, 1299))
         # Boundary: 86 extras = 1290¢ ok; 87 extras = 1305¢ over 1299¢.
-        self.assertTrue(within_monthly_cap(DEVELOPER, 336, 12.99))
-        self.assertFalse(within_monthly_cap(DEVELOPER, 337, 12.99))
-        self.assertTrue(allow_next_review(DEVELOPER, 335, 12.99))
-        self.assertFalse(allow_next_review(DEVELOPER, 336, 12.99))
+        self.assertTrue(within_monthly_cap(DEVELOPER, 336, 1299))
+        self.assertFalse(within_monthly_cap(DEVELOPER, 337, 1299))
+        self.assertTrue(allow_next_review(DEVELOPER, 335, 1299))
+        self.assertFalse(allow_next_review(DEVELOPER, 336, 1299))
 
-    def test_billing_period_start_is_month_utc(self) -> None:
+    def test_billing_period_follows_anchor_day(self) -> None:
         moment = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
-        start = billing_period_start(moment)
-        self.assertEqual(start, datetime(2026, 10, 1, 0, 0, tzinfo=UTC))
+        self.assertEqual(
+            billing_period_start(moment, anchor_day=1),
+            datetime(2026, 10, 1, 0, 0, tzinfo=UTC),
+        )
+        self.assertEqual(
+            billing_period_start(moment, anchor_day=21),
+            datetime(2026, 10, 21, 0, 0, tzinfo=UTC),
+        )
+        before_anchor = datetime(2026, 10, 20, 23, 0, tzinfo=UTC)
+        self.assertEqual(
+            billing_period_start(before_anchor, anchor_day=21),
+            datetime(2026, 9, 21, 0, 0, tzinfo=UTC),
+        )
+        # Anchor 31 clamps in February.
+        feb = datetime(2026, 2, 15, 12, 0, tzinfo=UTC)
+        self.assertEqual(
+            billing_period_start(feb, anchor_day=31),
+            datetime(2026, 1, 31, 0, 0, tzinfo=UTC),
+        )
+        self.assertEqual(
+            billing_period_start(datetime(2026, 2, 28, 0, 0, tzinfo=UTC), anchor_day=31),
+            datetime(2026, 2, 28, 0, 0, tzinfo=UTC),
+        )
+        self.assertEqual(
+            next_billing_period_start(feb, anchor_day=31),
+            datetime(2026, 2, 28, 0, 0, tzinfo=UTC),
+        )
 
-    def test_trial_ends_at_next_calendar_month(self) -> None:
+    def test_trial_ends_at_same_day_clamped(self) -> None:
         card = datetime(2026, 10, 21, 15, 30, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(card), datetime(2026, 11, 1, 0, 0, tzinfo=UTC))
-        year_end = datetime(2026, 12, 31, 23, 59, tzinfo=UTC)
-        self.assertEqual(trial_ends_at(year_end), datetime(2027, 1, 1, 0, 0, tzinfo=UTC))
+        self.assertEqual(trial_ends_at(card), datetime(2026, 11, 21, 15, 30, tzinfo=UTC))
+        jan31 = datetime(2026, 1, 31, 10, 0, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(jan31), datetime(2026, 2, 28, 10, 0, tzinfo=UTC))
+        leap = datetime(2024, 1, 31, 10, 0, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(leap), datetime(2024, 2, 29, 10, 0, tzinfo=UTC))
+        mar31 = datetime(2026, 3, 31, 8, 0, tzinfo=UTC)
+        self.assertEqual(trial_ends_at(mar31), datetime(2026, 4, 30, 8, 0, tzinfo=UTC))
+
+    def test_cap_reached_copy_templates(self) -> None:
+        self.assertEqual(
+            CAP_REACHED_ZERO.format(included=250),
+            "You’ve used all 250 reviews in your plan this month. "
+            "To keep reviewing, set a monthly spending cap for extra reviews.",
+        )
+        self.assertEqual(
+            CAP_REACHED_SET.format(cap="$12.99", reset_date="21 Nov 2026"),
+            "You’ve reached your $12.99 monthly spending cap for extra reviews. "
+            "Raise your cap to keep reviewing, or wait until 21 Nov 2026.",
+        )
+        self.assertEqual(format_cap_label(1299), "$12.99")
+        self.assertEqual(format_cap_label(100), "$1")
+        self.assertEqual(
+            format_reset_date(datetime(2026, 11, 21, 0, 0, tzinfo=UTC)),
+            "21 Nov 2026",
+        )
+        self.assertEqual(reviews_left_this_period(DEVELOPER, 36), 214)
 
 
 class PlanStoreAndApiTests(unittest.TestCase):
@@ -303,14 +356,45 @@ class PlanStoreAndApiTests(unittest.TestCase):
         key = store.seed_account(1)
         user_id = store.authenticate(key).user_id
         billing = store.billing(user_id)
-        self.assertEqual(billing.monthly_cap_usd, DEFAULT_MONTHLY_CAP_USD)
+        self.assertEqual(billing.monthly_cap_cents, DEFAULT_MONTHLY_CAP_CENTS)
         row = store._conn.execute(
-            "SELECT monthly_cap_usd FROM users WHERE id = ?",
+            "SELECT monthly_cap_cents FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
-        self.assertEqual(int(row["monthly_cap_usd"]), DEFAULT_MONTHLY_CAP_USD)
+        self.assertEqual(int(row["monthly_cap_cents"]), DEFAULT_MONTHLY_CAP_CENTS)
         cols = {str(r["name"]) for r in store._conn.execute("PRAGMA table_info(users)")}
         self.assertNotIn("reviews_finished", cols)
+        self.assertIn("monthly_cap_cents", cols)
+
+    def test_legacy_monthly_cap_usd_migrates_to_cents(self) -> None:
+        conn = sqlite3.connect(self.db)
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                email TEXT UNIQUE,
+                credits INTEGER NOT NULL,
+                stripe_customer_id TEXT,
+                plan TEXT NOT NULL DEFAULT 'developer',
+                monthly_cap_usd INTEGER NOT NULL DEFAULT 50
+            );
+            INSERT INTO users (email, credits, monthly_cap_usd)
+            VALUES ('legacy@example.com', 0, 50);
+            """
+        )
+        conn.commit()
+        conn.close()
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        row = store._conn.execute(
+            "SELECT monthly_cap_usd, monthly_cap_cents FROM users WHERE email = ?",
+            ("legacy@example.com",),
+        ).fetchone()
+        self.assertEqual(int(row["monthly_cap_usd"]), 50)
+        self.assertEqual(int(row["monthly_cap_cents"]), 5000)
+        cols = {str(r["name"]) for r in store._conn.execute("PRAGMA table_info(users)")}
+        self.assertIn("monthly_cap_usd", cols)
+        self.assertIn("monthly_cap_cents", cols)
 
     def test_cap_zero_last_included_accepted_first_extra_refused(self) -> None:
         key = self.seed(0)
@@ -318,7 +402,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         try:
             auth = store.authenticate(key)
             assert auth is not None
-            self.assertEqual(store.billing(auth.user_id).monthly_cap_usd, 0)
+            self.assertEqual(store.billing(auth.user_id).monthly_cap_cents, 0)
             when = format_time(billing_period_start())
             _seed_period_runs(
                 store,
@@ -348,7 +432,11 @@ class PlanStoreAndApiTests(unittest.TestCase):
         )
         self.assertEqual(denied_status, 402)
         self.assertEqual(denied["error"], "cap_reached")
-        self.assertIn("Set a monthly cap", denied["message"])
+        self.assertEqual(
+            denied["message"],
+            "You’ve used all 250 reviews in your plan this month. "
+            "To keep reviewing, set a monthly spending cap for extra reviews.",
+        )
 
     def test_after_setting_cap_extras_accepted_up_to_it(self) -> None:
         key = self.seed(0)
@@ -357,7 +445,6 @@ class PlanStoreAndApiTests(unittest.TestCase):
             auth = store.authenticate(key)
             assert auth is not None
             when = format_time(billing_period_start())
-            # Past included; $0.15 overage; cap $0.30 allows two extras.
             _seed_period_runs(
                 store,
                 user_id=auth.user_id,
@@ -365,7 +452,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
                 done=250,
                 created_at=when,
             )
-            store.set_billing(auth.user_id, monthly_cap_usd=0)
+            store.set_billing(auth.user_id, monthly_cap_cents=0)
         finally:
             store.close()
         port = self.open_quiet_server()
@@ -382,8 +469,8 @@ class PlanStoreAndApiTests(unittest.TestCase):
         try:
             auth = store.authenticate(key)
             assert auth is not None
-            # $1 → six extras at $0.15; seventh is refused.
-            store.set_billing(auth.user_id, monthly_cap_usd=1)
+            # $1 = 100¢ → six extras at 15¢; seventh is refused.
+            store.set_billing(auth.user_id, monthly_cap_cents=100)
         finally:
             store.close()
         for i in range(6):
@@ -404,6 +491,47 @@ class PlanStoreAndApiTests(unittest.TestCase):
         )
         self.assertEqual(over, 402)
         self.assertEqual(over_body["error"], "cap_reached")
+        self.assertIn("You’ve reached your $1 monthly spending cap", over_body["message"])
+        self.assertIn("Raise your cap to keep reviewing, or wait until", over_body["message"])
+
+    def test_fractional_cap_cents_via_set_billing_and_accept(self) -> None:
+        key = self.seed(0)
+        store = Store(self.db)
+        try:
+            auth = store.authenticate(key)
+            assert auth is not None
+            when = format_time(billing_period_start())
+            # 85 extras already done → next accept is the 86th extra.
+            _seed_period_runs(
+                store,
+                user_id=auth.user_id,
+                key_id=auth.id,
+                done=335,
+                created_at=when,
+            )
+            store.set_billing(auth.user_id, monthly_cap_cents=usd_to_cents(12.99))
+            self.assertEqual(store.billing(auth.user_id).monthly_cap_cents, 1299)
+        finally:
+            store.close()
+        port = self.open_quiet_server()
+        ok, _ = self.exchange(
+            port,
+            "POST",
+            "/v1/reviews",
+            key,
+            {"diff": _added("extra86.py", 1, "a")},
+        )
+        self.assertEqual(ok, 202)
+        denied_status, denied = self.exchange(
+            port,
+            "POST",
+            "/v1/reviews",
+            key,
+            {"diff": _added("extra87.py", 1, "b")},
+        )
+        self.assertEqual(denied_status, 402)
+        self.assertEqual(denied["error"], "cap_reached")
+        self.assertIn("$12.99", denied["message"])
 
     def test_failed_runs_never_count_toward_period(self) -> None:
         store = Store(self.db)
@@ -411,7 +539,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         key = store.seed_account(5)
         auth = store.authenticate(key)
         assert auth is not None
-        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        store.set_billing(auth.user_id, monthly_cap_cents=0)
         _seed_period_runs(store, user_id=auth.user_id, key_id=auth.id, failed=400)
         self.assertEqual(store.billing(auth.user_id).period_reviews, 0)
         store.insert_queued(
@@ -460,7 +588,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         key = store.seed_account(5)
         auth = store.authenticate(key)
         assert auth is not None
-        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        store.set_billing(auth.user_id, monthly_cap_cents=0)
         prior = format_time(datetime(2026, 9, 15, 12, 0, tzinfo=UTC))
         _seed_period_runs(
             store,
@@ -479,7 +607,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         key = store.seed_account(5)
         auth = store.authenticate(key)
         assert auth is not None
-        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        store.set_billing(auth.user_id, monthly_cap_cents=0)
         _seed_period_runs(store, user_id=auth.user_id, key_id=auth.id, done=249, queued=1)
         self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
         self.assertFalse(
@@ -494,7 +622,7 @@ class PlanStoreAndApiTests(unittest.TestCase):
         secret = store.seed_account(credits)
         auth = store.authenticate(secret)
         assert auth is not None
-        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        store.set_billing(auth.user_id, monthly_cap_cents=0)
         when = format_time(billing_period_start())
         _seed_period_runs(
             store,

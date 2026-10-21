@@ -16,11 +16,7 @@ _GENERATED_SEGMENTS = frozenset({"snapshots", "vendor", "vendored"})
 _REFUSALS = {
     "bad_request": (400, "The review request is not valid."),
     "unauthorized": (401, "The API key is not valid."),
-    "no_credit": (402, "The account has no credits."),
-    "cap_reached": (
-        402,
-        "The monthly cap on extra reviews is reached. Set a monthly cap to keep going.",
-    ),
+    "cap_reached": (402, "The monthly spending cap for extra reviews is reached."),
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),
@@ -72,7 +68,7 @@ class ShowRun:
 
 
 @dataclass(frozen=True)
-class ShowCredits:
+class ShowMe:
     status: int
 
 
@@ -84,12 +80,17 @@ class Refused:
     files: tuple[str, ...] | None = None
 
 
-Decision = Accepted | Replay | ShowRun | ShowCredits | Refused
+Decision = Accepted | Replay | ShowRun | ShowMe | Refused
 
 
-def refuse(code: str, files: tuple[str, ...] | None = None) -> Refused:
-    status, message = _REFUSALS[code]
-    return Refused(code, status, message, files)
+def refuse(
+    code: str,
+    files: tuple[str, ...] | None = None,
+    *,
+    message: str | None = None,
+) -> Refused:
+    status, default = _REFUSALS[code]
+    return Refused(code, status, default if message is None else message, files)
 
 
 def decide(op: PostOp | GetRunOp | GetMeOp) -> Decision:
@@ -113,7 +114,7 @@ def _decide_get_run(op: GetRunOp) -> Decision:
 def _decide_get_me(op: GetMeOp) -> Decision:
     if not op.key_ok:
         return refuse("unauthorized")
-    return ShowCredits(200)
+    return ShowMe(200)
 
 
 def _decide_post(op: PostOp) -> Decision:

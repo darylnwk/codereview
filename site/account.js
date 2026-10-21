@@ -1,6 +1,6 @@
 (function () {
   // Example / mock data only. Nothing here calls the API or Stripe.
-  var STORAGE = "reviewgrade.account.v4";
+  var STORAGE = "reviewgrade.account.v5";
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var blank = {
     email: "ada@example.com",
@@ -8,7 +8,7 @@
     cap: 0, // mock: default overage cap is $0 (Daryl, 21 Oct 2026)
     finished: 36,
     included: 250,
-    trial: true, // mock: one calendar month free after card on file
+    trial: true, // mock: first month free after card on file
     keys: [
       { name: "ci", prefix: "ra_live_7kQm3aP1", last: "2 Oct", revoked: false },
       { name: "agent", prefix: "ra_live_p2nR8cQw", last: "", revoked: false }
@@ -29,8 +29,8 @@
       price: 25,
       overage: 0.15,
       tag: "Developer",
-      line: "$25/month for 250 reviews. Then $0.15 a review after you set a monthly cap. Mock data.",
-      bill: "Developer plan (mock), $25 for 250 reviews. One calendar month free after card on file. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
+      line: "$25/month for 250 reviews. Then $0.15 a review after you set a monthly spending cap. Mock data.",
+      bill: "Developer plan (mock), $25 for 250 reviews. Your first month is free when you add a card. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
       finished: 36,
       unit: "1 review · included"
     },
@@ -39,8 +39,8 @@
       price: 199,
       overage: 0.06,
       tag: "Fleet",
-      line: "$199/month for 2,500 reviews. Then $0.06 a review after you set a monthly cap. Mock data.",
-      bill: "Fleet plan (mock), $199 for 2,500 reviews. One calendar month free after card on file. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
+      line: "$199/month for 2,500 reviews. Then $0.06 a review after you set a monthly spending cap. Mock data.",
+      bill: "Fleet plan (mock), $199 for 2,500 reviews. Your first month is free when you add a card. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
       finished: 420,
       unit: "1 review · included"
     }
@@ -72,10 +72,13 @@
   function left() { return Math.max(0, state.included - state.finished); }
   function capLine() {
     var p = plan();
-    if (state.cap === 0) {
-      return "No overage by default. After " + p.included + " included reviews, set a monthly cap to keep going.";
-    }
-    return "After " + p.included + " reviews, each one is $" + p.overage.toFixed(2) + " until the extra charge reaches $" + state.cap + ".";
+    var rate = "$" + p.overage.toFixed(2);
+    return (
+      p.included +
+      " reviews are included each month. Extra reviews are off until you set a monthly spending cap. Then each extra review costs " +
+      rate +
+      ", up to your cap."
+    );
   }
   function extra() {
     var p = plan();

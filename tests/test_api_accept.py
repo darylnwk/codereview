@@ -239,7 +239,7 @@ class ApiAcceptTests(unittest.TestCase):
         self.assertEqual(got, _QUEUED)
         me_status, me = self.exchange("GET", "/v1/me", key)
         self.assertEqual(me_status, 200)
-        self.assertEqual(me, {"credits": 4})
+        self.assertEqual(me, {"reviews_left": 249})
         self.assertIsNone(got["findings"])
         self.assertNotEqual(got["findings"], [])
 
@@ -251,7 +251,7 @@ class ApiAcceptTests(unittest.TestCase):
         self.assertEqual(list(body), ["run_id"])
         me_status, me = self.exchange("GET", "/v1/me", key)
         self.assertEqual(me_status, 200)
-        self.assertEqual(me, {"credits": 0})
+        self.assertEqual(me, {"reviews_left": 249})
         self.assertEqual(len(self.run_rows()), 1)
 
     def test_generated_diff_returns_413(self) -> None:
@@ -293,7 +293,7 @@ class ApiAcceptTests(unittest.TestCase):
         self.assertRegex(body["run_id"], _RUN_ID)
         me_status, me = self.exchange("GET", "/v1/me", key)
         self.assertEqual(me_status, 200)
-        self.assertEqual(me, {"credits": 3})
+        self.assertEqual(me, {"reviews_left": 249})
 
     def test_test_file_is_a_normal_file(self) -> None:
         key = self.seed(1)
@@ -393,7 +393,7 @@ class ApiAcceptTests(unittest.TestCase):
             self.assertRegex(body["run_id"], _RUN_ID)
         me_status, me = self.exchange("GET", "/v1/me", key)
         self.assertEqual(me_status, 200)
-        self.assertEqual(me, {"credits": 3})
+        self.assertEqual(me, {"reviews_left": 240})
         replay_status, replay_body = self.exchange(
             "POST", "/v1/reviews", key, {"diff": _tiny("f0.py")}, "slot"
         )
