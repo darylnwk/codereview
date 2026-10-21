@@ -17,7 +17,6 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from review_grade.api.plans import (
@@ -40,6 +39,8 @@ from review_grade.api.plans import (
     overage_spend_usd,
     within_monthly_cap,
 )
+from review_grade.api import http as http_api
+from review_grade.api.gate import Accepted
 from review_grade.api.store import Store, format_time
 from review_grade.api.worker import reviewer_for, settle_one
 
@@ -412,60 +413,111 @@ class PlanStoreAndApiTests(unittest.TestCase):
             )
         )
 
-    def test_concurrent_accepts_cannot_exceed_cap(self) -> None:
-        key = self.seed(20)
+    def _cap_race_fixture(self, store: Store, credits: int = 5):
+        key = store.seed_account(credits)
+        auth = store.authenticate(key)
+        assert auth is not None
+        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        when = format_time(billing_period_start())
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=249,
+            created_at=when,
+        )
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 249)
+        return auth
+
+    def _accepted(self, index: int) -> Accepted:
+        digest = f"{index:064d}"
+        return Accepted(
+            202,
+            _added(f"race{index}.py", 1, "r"),
+            digest,
+            "api",
+            None,
+        )
+
+    def test_split_cap_insert_races_every_time_with_barrier(self) -> None:
+        """Without one transaction, a barrier between check and insert overruns."""
         store = Store(self.db)
-        try:
-            auth = store.authenticate(key)
-            assert auth is not None
-            store.set_billing(auth.user_id, monthly_cap_usd=0)
-            when = format_time(billing_period_start())
-            _seed_period_runs(
+        self.addCleanup(store.close)
+        auth = self._cap_race_fixture(store)
+        barrier = threading.Barrier(2)
+        http_api.after_cap_check = lambda: barrier.wait(timeout=2)
+        self.addCleanup(lambda: setattr(http_api, "after_cap_check", None))
+        results: list[tuple[int, dict]] = []
+
+        def worker(index: int) -> None:
+            status, body = http_api._queue_if_under_cap_split(
                 store,
-                user_id=auth.user_id,
-                key_id=auth.id,
-                done=249,
-                created_at=when,
+                auth,
+                self._accepted(index),
+                None,
             )
-        finally:
-            store.close()
-        port = self.open_quiet_server()
-        barrier = threading.Barrier(8)
+            results.append((status, body))
 
-        def one(index: int):
-            barrier.wait(timeout=5)
-            return self.exchange(
-                port,
-                "POST",
-                "/v1/reviews",
-                key,
-                {"diff": _added(f"race{index}.py", 1, "r")},
-            )
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(len(results), 2, results)
+        self.assertTrue(all(status == 202 for status, _ in results), results)
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 251)
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = list(pool.map(one, range(8)))
+    def test_atomic_cap_insert_one_winner_with_barrier(self) -> None:
+        """With check+insert in one transaction, only one of two waiters wins."""
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        auth = self._cap_race_fixture(store)
+        start = threading.Barrier(2)
+        results: list[tuple[int, dict]] = []
+
+        def worker(index: int) -> None:
+            start.wait(timeout=2)
+            with store.transaction():
+                status, body = http_api._queue_if_under_cap(
+                    store,
+                    auth,
+                    self._accepted(index),
+                    None,
+                )
+            results.append((status, body))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(len(results), 2, results)
         accepted = [body for status, body in results if status == 202]
         capped = [body for status, body in results if status == 402]
         self.assertEqual(len(accepted), 1, results)
-        self.assertEqual(len(capped), 7, results)
-        self.assertTrue(all(body.get("error") == "cap_reached" for body in capped))
-        connection = sqlite3.connect(self.db)
-        try:
-            queued = connection.execute(
-                "SELECT COUNT(*) FROM runs WHERE status = 'queued'"
-            ).fetchone()[0]
-            billable = connection.execute(
-                """
-                SELECT COUNT(*) FROM runs
-                WHERE status IN ('queued', 'done')
-                  AND created_at >= ?
-                """,
-                (format_time(billing_period_start()),),
-            ).fetchone()[0]
-        finally:
-            connection.close()
-        self.assertEqual(queued, 1)
-        self.assertEqual(billable, 250)
+        self.assertEqual(len(capped), 1, results)
+        self.assertEqual(capped[0].get("error"), "cap_reached")
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
+
+    def test_drop_reviews_finished_tolerates_old_sqlite(self) -> None:
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        real = store._conn
+        real.execute(
+            "ALTER TABLE users ADD COLUMN reviews_finished INTEGER NOT NULL DEFAULT 0"
+        )
+
+        class _OldSqliteConn:
+            def execute(self, sql, parameters=()):
+                if isinstance(sql, str) and "DROP COLUMN reviews_finished" in sql:
+                    raise sqlite3.OperationalError('near "COLUMN": syntax error')
+                return real.execute(sql, parameters)
+
+        store._conn = _OldSqliteConn()  # type: ignore[assignment]
+        store._drop_reviews_finished_column()
+        cols = {str(row["name"]) for row in real.execute("PRAGMA table_info(users)")}
+        self.assertIn("reviews_finished", cols)
+        store._conn = real
 
 
 if __name__ == "__main__":

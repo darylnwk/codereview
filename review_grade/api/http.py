@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socketserver
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote, urlsplit
@@ -23,7 +24,11 @@ from review_grade.api.gate import (
     refuse,
 )
 from review_grade.api.plans import allow_next_review, get_plan
-from review_grade.api.store import Store, format_time
+from review_grade.api.store import Key, Store, format_time
+
+# Test-only hook: runs after a successful cap check and before insert_queued.
+# Production leaves this None.
+after_cap_check: Callable[[], None] | None = None
 
 
 class ReviewServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -79,6 +84,76 @@ def _handler(store: Store):
     return Handler
 
 
+def _queue_if_under_cap(
+    store: Store,
+    key: Key,
+    decision: Accepted,
+    idempotency_key: str | None,
+) -> tuple[int, dict]:
+    """Check the period cap then insert a queued run.
+
+    Caller must already hold ``store.transaction()`` so the check and insert
+    are one SQLite CRITICAL section (BEGIN IMMEDIATE).
+    """
+    billing = store.billing(key.user_id)
+    plan = get_plan(billing.plan)
+    if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
+        denied = refuse("cap_reached")
+        return denied.status, _error_body(denied)
+    hook = after_cap_check
+    if hook is not None:
+        hook()
+    pending = None
+    if decision.omitted is not None:
+        pending = json.dumps(list(decision.omitted))
+    run_id = store.insert_queued(
+        user_id=key.user_id,
+        key_id=key.id,
+        diff_hash=decision.diff_hash,
+        diff_text=decision.kept_diff,
+        source=decision.source,
+        idempotency_key=idempotency_key,
+        omitted_pending=pending,
+    )
+    return 202, {"run_id": run_id}
+
+
+def _queue_if_under_cap_split(
+    store: Store,
+    key: Key,
+    decision: Accepted,
+    idempotency_key: str | None,
+) -> tuple[int, dict]:
+    """Test-only: cap check and insert in separate transactions.
+
+    The ``after_cap_check`` hook runs in the gap so a barrier can force both
+    threads past the check before either inserts.
+    """
+    with store.transaction():
+        billing = store.billing(key.user_id)
+        plan = get_plan(billing.plan)
+        if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
+            denied = refuse("cap_reached")
+            return denied.status, _error_body(denied)
+    hook = after_cap_check
+    if hook is not None:
+        hook()
+    with store.transaction():
+        pending = None
+        if decision.omitted is not None:
+            pending = json.dumps(list(decision.omitted))
+        run_id = store.insert_queued(
+            user_id=key.user_id,
+            key_id=key.id,
+            diff_hash=decision.diff_hash,
+            diff_text=decision.kept_diff,
+            source=decision.source,
+            idempotency_key=idempotency_key,
+            omitted_pending=pending,
+        )
+        return 202, {"run_id": run_id}
+
+
 def accept_review(
     store: Store,
     token: str | None,
@@ -118,26 +193,7 @@ def accept_review(
                 denied = refuse("too_expensive")
                 return denied.status, _error_body(denied)
             # Cap check + insert share this BEGIN IMMEDIATE transaction.
-            # period_reviews counts queued+done in the calendar month (UTC);
-            # inserting the queued row reserves the slot before commit.
-            billing = store.billing(key.user_id)
-            plan = get_plan(billing.plan)
-            if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
-                denied = refuse("cap_reached")
-                return denied.status, _error_body(denied)
-            pending = None
-            if decision.omitted is not None:
-                pending = json.dumps(list(decision.omitted))
-            run_id = store.insert_queued(
-                user_id=key.user_id,
-                key_id=key.id,
-                diff_hash=decision.diff_hash,
-                diff_text=decision.kept_diff,
-                source=decision.source,
-                idempotency_key=idempotency_key,
-                omitted_pending=pending,
-            )
-            return decision.status, {"run_id": run_id}
+            return _queue_if_under_cap(store, key, decision, idempotency_key)
         if isinstance(decision, Replay):
             return decision.status, {"run_id": decision.run_id}
         if isinstance(decision, Refused):

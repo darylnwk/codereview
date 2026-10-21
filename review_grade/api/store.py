@@ -134,10 +134,18 @@ class Store:
         for name, decl in _USER_COLUMNS:
             if name not in have:
                 self._conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
-        # Drop the lifetime counter from the earlier pricing PR if present.
+        self._drop_reviews_finished_column()
+
+    def _drop_reviews_finished_column(self) -> None:
+        """Remove the lifetime counter if present. No-op on SQLite < 3.35."""
         have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
-        if "reviews_finished" in have:
+        if "reviews_finished" not in have:
+            return
+        try:
             self._conn.execute("ALTER TABLE users DROP COLUMN reviews_finished")
+        except sqlite3.OperationalError:
+            # DROP COLUMN needs SQLite 3.35+. Leave the unused column.
+            return
 
     @contextmanager
     def transaction(self):
