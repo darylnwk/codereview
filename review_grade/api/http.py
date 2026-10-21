@@ -117,9 +117,12 @@ def accept_review(
             if price_cap and over_cap(decision.kept_diff):
                 denied = refuse("too_expensive")
                 return denied.status, _error_body(denied)
+            # Cap check + insert share this BEGIN IMMEDIATE transaction.
+            # period_reviews counts queued+done in the calendar month (UTC);
+            # inserting the queued row reserves the slot before commit.
             billing = store.billing(key.user_id)
             plan = get_plan(billing.plan)
-            if not allow_next_review(plan, billing.reviews_finished, billing.monthly_cap_usd):
+            if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
                 denied = refuse("cap_reached")
                 return denied.status, _error_body(denied)
             pending = None

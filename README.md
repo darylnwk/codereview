@@ -10,6 +10,8 @@ This repo is the agentic build: the review API, the internal recall benchmark, a
 - **Developer:** $25/month, 250 reviews included, then $0.15 per extra review (user-set monthly cap).
 - **Fleet:** $199/month, 2,500 reviews included, then $0.06 per extra review (user-set monthly cap).
 - No annual pricing. The old per-email free-review trial is gone.
+- Included/overage usage is counted per billing period from finished and accepted runs (failed never count). Period start is the calendar month UTC for now; later it will follow Stripe's billing anchor.
+- Default monthly overage cap is $50 (carried over from main; same constant for Developer and Fleet until decided otherwise).
 
 ## How to run
 

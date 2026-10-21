@@ -6,33 +6,41 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from review_grade.api.plans import (
     ANNUAL_PRICING,
+    DEFAULT_MONTHLY_CAP_CENTS,
     DEFAULT_MONTHLY_CAP_USD,
     DEVELOPER,
     FLEET,
     PLANS,
     TRIAL_DAYS,
     allow_next_review,
+    billing_period_start,
     charge_for_review,
+    charge_for_review_cents,
     get_plan,
     has_legacy_trial_plan,
     monthly_spend_usd,
     overage_reviews,
+    overage_spend_cents,
     overage_spend_usd,
     within_monthly_cap,
 )
-from review_grade.api.store import Store
+from review_grade.api.store import Store, format_time
 from review_grade.api.worker import reviewer_for, settle_one
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,17 +62,74 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _seed_period_runs(
+    store: Store,
+    *,
+    user_id: int,
+    key_id: int,
+    done: int = 0,
+    failed: int = 0,
+    queued: int = 0,
+    created_at: str | None = None,
+) -> None:
+    """Insert settled/queued rows with a chosen created_at (current period by default)."""
+    when = created_at or format_time(datetime.now(timezone.utc))
+    with store.transaction():
+        for index in range(done):
+            run_id = "run_done_" + secrets.token_hex(8) + f"_{index}"
+            store._conn.execute(
+                """
+                INSERT INTO runs (
+                    id, user_id, key_id, diff_hash, diff_text, findings_json, status,
+                    partial, omitted_json, cost_usd, source, idempotency_key, created_at
+                ) VALUES (?, ?, ?, ?, NULL, '[]', 'done', 0, NULL, 0.0, 'api', NULL, ?)
+                """,
+                (run_id, user_id, key_id, "d" * 64, when),
+            )
+        for index in range(failed):
+            run_id = "run_fail_" + secrets.token_hex(8) + f"_{index}"
+            store._conn.execute(
+                """
+                INSERT INTO runs (
+                    id, user_id, key_id, diff_hash, diff_text, findings_json, status,
+                    partial, omitted_json, cost_usd, source, idempotency_key, created_at
+                ) VALUES (?, ?, ?, ?, NULL, NULL, 'failed', 0, NULL, NULL, 'api', NULL, ?)
+                """,
+                (run_id, user_id, key_id, "f" * 64, when),
+            )
+        for index in range(queued):
+            store._insert_queued(
+                user_id=user_id,
+                key_id=key_id,
+                diff_hash="q" * 64,
+                diff_text=_added(f"q{index}.py", 1, "q"),
+                source="api",
+                idempotency_key=None,
+                omitted_pending=None,
+                created_at=when,
+            )
+
+
 class PlanMathTests(unittest.TestCase):
     def test_developer_and_fleet_included_and_prices(self) -> None:
         self.assertEqual(DEVELOPER.monthly_price_usd, 25)
+        self.assertEqual(DEVELOPER.monthly_price_cents, 2500)
         self.assertEqual(DEVELOPER.included_reviews, 250)
         self.assertEqual(DEVELOPER.overage_usd, 0.15)
+        self.assertEqual(DEVELOPER.overage_cents, 15)
         self.assertEqual(FLEET.monthly_price_usd, 199)
+        self.assertEqual(FLEET.monthly_price_cents, 19900)
         self.assertEqual(FLEET.included_reviews, 2500)
         self.assertEqual(FLEET.overage_usd, 0.06)
+        self.assertEqual(FLEET.overage_cents, 6)
         self.assertEqual(set(PLANS), {"developer", "fleet"})
         self.assertIs(get_plan("developer"), DEVELOPER)
         self.assertIs(get_plan("fleet"), FLEET)
+
+    def test_default_cap_constant_is_single_source(self) -> None:
+        self.assertEqual(DEFAULT_MONTHLY_CAP_USD, 50)
+        self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, 5000)
+        self.assertEqual(DEFAULT_MONTHLY_CAP_CENTS, DEFAULT_MONTHLY_CAP_USD * 100)
 
     def test_no_legacy_twenty_review_trial(self) -> None:
         self.assertFalse(has_legacy_trial_plan())
@@ -74,7 +139,6 @@ class PlanMathTests(unittest.TestCase):
             self.assertNotEqual(plan.monthly_price_usd, 0)
         self.assertEqual(TRIAL_DAYS, 30)
         self.assertFalse(ANNUAL_PRICING)
-        self.assertEqual(DEFAULT_MONTHLY_CAP_USD, 50)
 
     def test_included_reviews_have_no_overage_charge(self) -> None:
         self.assertEqual(overage_reviews(DEVELOPER, 0), 0)
@@ -83,34 +147,42 @@ class PlanMathTests(unittest.TestCase):
         self.assertEqual(charge_for_review(DEVELOPER, 0, status="done"), 0.0)
         self.assertEqual(charge_for_review(DEVELOPER, 249, status="done"), 0.0)
         self.assertEqual(charge_for_review(DEVELOPER, 250, status="done"), 0.15)
+        self.assertEqual(charge_for_review_cents(DEVELOPER, 250, status="done"), 15)
         self.assertEqual(charge_for_review(FLEET, 2499, status="done"), 0.0)
         self.assertEqual(charge_for_review(FLEET, 2500, status="done"), 0.06)
+        self.assertEqual(charge_for_review_cents(FLEET, 2500, status="done"), 6)
 
     def test_overage_rates_and_monthly_spend(self) -> None:
         self.assertEqual(overage_spend_usd(DEVELOPER, 250), 0.0)
+        self.assertEqual(overage_spend_cents(DEVELOPER, 260), 150)
         self.assertAlmostEqual(overage_spend_usd(DEVELOPER, 260), 1.5)
-        self.assertAlmostEqual(overage_spend_usd(FLEET, 2600), 6.0)
+        self.assertEqual(overage_spend_cents(FLEET, 2600), 600)
         self.assertEqual(monthly_spend_usd(DEVELOPER, 36), 25.0)
         self.assertAlmostEqual(monthly_spend_usd(DEVELOPER, 260), 26.5)
         self.assertEqual(monthly_spend_usd(FLEET, 100), 199.0)
 
     def test_failed_runs_are_free(self) -> None:
         self.assertEqual(charge_for_review(DEVELOPER, 0, status="failed"), 0.0)
-        self.assertEqual(charge_for_review(DEVELOPER, 300, status="failed"), 0.0)
+        self.assertEqual(charge_for_review_cents(DEVELOPER, 300, status="failed"), 0)
         self.assertEqual(charge_for_review(FLEET, 3000, status="failed"), 0.0)
 
-    def test_user_cap_enforcement(self) -> None:
-        # Cap $50 on Developer: floor(50/0.15)=333 extras → finished up to 250+333=583.
+    def test_user_cap_boundary_exactly_at_cap(self) -> None:
+        # Cap $50 on Developer: 333 extras * 15¢ = 4995¢ <= 5000¢; 334th exceeds.
         self.assertTrue(within_monthly_cap(DEVELOPER, 583, 50))
         self.assertFalse(within_monthly_cap(DEVELOPER, 584, 50))
         self.assertTrue(allow_next_review(DEVELOPER, 582, 50))
         self.assertFalse(allow_next_review(DEVELOPER, 583, 50))
         self.assertTrue(allow_next_review(DEVELOPER, 249, 0))
         self.assertFalse(allow_next_review(DEVELOPER, 250, 0))
-        # Fleet $0.06: floor(50/0.06)=833 extras → 2500+833=3333.
+        # Fleet $0.06: 833 extras * 6¢ = 4998¢; 834th exceeds.
         self.assertTrue(within_monthly_cap(FLEET, 3333, 50))
         self.assertFalse(within_monthly_cap(FLEET, 3334, 50))
         self.assertFalse(allow_next_review(FLEET, 3333, 50))
+
+    def test_billing_period_start_is_month_utc(self) -> None:
+        moment = datetime(2026, 10, 21, 15, 30, tzinfo=timezone.utc)
+        start = billing_period_start(moment)
+        self.assertEqual(start, datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc))
 
 
 class PlanStoreAndApiTests(unittest.TestCase):
@@ -202,12 +274,38 @@ class PlanStoreAndApiTests(unittest.TestCase):
             finally:
                 error.close()
 
-    def test_cap_reached_refuses_before_queue(self) -> None:
+    def test_default_cap_used_by_schema_and_insert(self) -> None:
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        key = store.seed_account(1)
+        user_id = store.authenticate(key).user_id
+        billing = store.billing(user_id)
+        self.assertEqual(billing.monthly_cap_usd, DEFAULT_MONTHLY_CAP_USD)
+        row = store._conn.execute(
+            "SELECT monthly_cap_usd FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        self.assertEqual(int(row["monthly_cap_usd"]), DEFAULT_MONTHLY_CAP_USD)
+        cols = {str(r["name"]) for r in store._conn.execute("PRAGMA table_info(users)")}
+        self.assertNotIn("reviews_finished", cols)
+
+    def test_cap_reached_at_exact_boundary(self) -> None:
         key = self.seed(5)
         store = Store(self.db)
         try:
-            user_id = store.authenticate(key).user_id
-            store.set_billing(user_id, reviews_finished=250, monthly_cap_usd=0)
+            auth = store.authenticate(key)
+            assert auth is not None
+            store.set_billing(auth.user_id, monthly_cap_usd=0)
+            # Stamp at period start so the 60s accept rate window stays empty.
+            when = format_time(billing_period_start())
+            _seed_period_runs(
+                store,
+                user_id=auth.user_id,
+                key_id=auth.id,
+                done=250,
+                created_at=when,
+            )
+            self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
         finally:
             store.close()
         port = self.open_quiet_server()
@@ -222,39 +320,152 @@ class PlanStoreAndApiTests(unittest.TestCase):
         self.assertEqual(body["error"], "cap_reached")
         connection = sqlite3.connect(self.db)
         try:
-            count = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            count = connection.execute(
+                "SELECT COUNT(*) FROM runs WHERE status = 'queued'"
+            ).fetchone()[0]
         finally:
             connection.close()
         self.assertEqual(count, 0)
 
-    def test_done_increments_finished_failed_does_not(self) -> None:
+    def test_failed_runs_never_count_toward_period(self) -> None:
         store = Store(self.db)
         self.addCleanup(store.close)
         key = store.seed_account(5)
-        user_id = store.authenticate(key).user_id
+        auth = store.authenticate(key)
+        assert auth is not None
+        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        _seed_period_runs(store, user_id=auth.user_id, key_id=auth.id, failed=400)
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 0)
+        store.insert_queued(
+            user_id=auth.user_id,
+            key_id=auth.id,
+            diff_hash="a" * 64,
+            diff_text=_added("bad.py", 1, "b"),
+            source="api",
+            idempotency_key=None,
+        )
+        self.assertTrue(settle_one(store, reviewer_for("error")))
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 0)
+
+    def test_done_counts_failed_does_not_via_worker(self) -> None:
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        key = store.seed_account(5)
+        auth = store.authenticate(key)
+        assert auth is not None
         run_ok = store.insert_queued(
-            user_id=user_id,
-            key_id=store.authenticate(key).id,
+            user_id=auth.user_id,
+            key_id=auth.id,
             diff_hash="a" * 64,
             diff_text=_added("ok.py", 1, "a"),
             source="api",
             idempotency_key=None,
         )
         self.assertTrue(settle_one(store, reviewer_for("finding")))
-        self.assertEqual(store.billing(user_id).reviews_finished, 1)
-        row = store.get_run(user_id, run_ok)
-        self.assertEqual(row["status"], "done")
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 1)
+        self.assertEqual(store.get_run(auth.user_id, run_ok)["status"], "done")
 
         store.insert_queued(
-            user_id=user_id,
-            key_id=store.authenticate(key).id,
+            user_id=auth.user_id,
+            key_id=auth.id,
             diff_hash="b" * 64,
             diff_text=_added("bad.py", 1, "b"),
             source="api",
             idempotency_key=None,
         )
         self.assertTrue(settle_one(store, reviewer_for("error")))
-        self.assertEqual(store.billing(user_id).reviews_finished, 1)
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 1)
+
+    def test_month_rollover_resets_included_reviews(self) -> None:
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        key = store.seed_account(5)
+        auth = store.authenticate(key)
+        assert auth is not None
+        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        prior = format_time(datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc))
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=250,
+            created_at=prior,
+        )
+        now = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(store.billing(auth.user_id, now=now).period_reviews, 0)
+        self.assertTrue(allow_next_review(DEVELOPER, 0, 0))
+
+    def test_queued_reserves_cap_slot(self) -> None:
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        key = store.seed_account(5)
+        auth = store.authenticate(key)
+        assert auth is not None
+        store.set_billing(auth.user_id, monthly_cap_usd=0)
+        _seed_period_runs(store, user_id=auth.user_id, key_id=auth.id, done=249, queued=1)
+        self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
+        self.assertFalse(
+            allow_next_review(
+                DEVELOPER,
+                store.billing(auth.user_id).period_reviews,
+                0,
+            )
+        )
+
+    def test_concurrent_accepts_cannot_exceed_cap(self) -> None:
+        key = self.seed(20)
+        store = Store(self.db)
+        try:
+            auth = store.authenticate(key)
+            assert auth is not None
+            store.set_billing(auth.user_id, monthly_cap_usd=0)
+            when = format_time(billing_period_start())
+            _seed_period_runs(
+                store,
+                user_id=auth.user_id,
+                key_id=auth.id,
+                done=249,
+                created_at=when,
+            )
+        finally:
+            store.close()
+        port = self.open_quiet_server()
+        barrier = threading.Barrier(8)
+
+        def one(index: int):
+            barrier.wait(timeout=5)
+            return self.exchange(
+                port,
+                "POST",
+                "/v1/reviews",
+                key,
+                {"diff": _added(f"race{index}.py", 1, "r")},
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(one, range(8)))
+        accepted = [body for status, body in results if status == 202]
+        capped = [body for status, body in results if status == 402]
+        self.assertEqual(len(accepted), 1, results)
+        self.assertEqual(len(capped), 7, results)
+        self.assertTrue(all(body.get("error") == "cap_reached" for body in capped))
+        connection = sqlite3.connect(self.db)
+        try:
+            queued = connection.execute(
+                "SELECT COUNT(*) FROM runs WHERE status = 'queued'"
+            ).fetchone()[0]
+            billable = connection.execute(
+                """
+                SELECT COUNT(*) FROM runs
+                WHERE status IN ('queued', 'done')
+                  AND created_at >= ?
+                """,
+                (format_time(billing_period_start()),),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(queued, 1)
+        self.assertEqual(billable, 250)
 
 
 if __name__ == "__main__":

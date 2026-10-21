@@ -202,9 +202,11 @@ Kill gate, before Stripe:
 
 ## Tables
 
-- `users(email, credits, stripe_customer_id, plan, monthly_cap_usd, reviews_finished)`
+- `users(email, credits, stripe_customer_id, plan, monthly_cap_usd)`
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
+
+Included reviews and the overage cap are counted per billing period from `runs`: `queued` + `done` since period start. Failed runs never count. Period start is the calendar month in UTC for now; it will follow Stripe's subscription billing anchor later. Accept checks the count and inserts the queued row in one transaction so concurrent accepts cannot overrun the cap.
 
 `cache_read` and `cache_write` are columns on `runs`. They stay null. `review_diff` does not return token counts, and a fixture run does not invent them. `omitted` lists paths left out when the request included `files`. A queued GET leaves it empty.
 
