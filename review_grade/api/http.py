@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import socketserver
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -25,9 +25,9 @@ from review_grade.api.gate import (
 )
 from review_grade.api.plans import (
     CAP_REACHED_SET,
-    CAP_REACHED_ZERO,
     allow_next_review,
     format_cap_label,
+    format_cap_reached_zero,
     format_reset_date,
     get_plan,
     next_billing_period_start,
@@ -45,7 +45,7 @@ def _wall_now() -> datetime:
     hook = clock
     if hook is not None:
         return hook()
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ReviewServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -103,7 +103,7 @@ def _handler(store: Store):
 
 def _cap_reached_message(plan, billing: Billing, *, now: datetime | None = None) -> str:
     if billing.monthly_cap_cents == 0:
-        return CAP_REACHED_ZERO.format(included=plan.included_reviews)
+        return format_cap_reached_zero(plan.included_reviews)
     reset = next_billing_period_start(now, anchor_day=billing.billing_anchor_day)
     return CAP_REACHED_SET.format(
         cap=format_cap_label(billing.monthly_cap_cents),

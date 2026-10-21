@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from review_grade.api.plans import DEFAULT_MONTHLY_CAP_CENTS, billing_period_start
 
@@ -490,7 +490,7 @@ class Store:
         created_at: str | None,
     ) -> str:
         run_id = "run_" + secrets.token_urlsafe(12)
-        when = created_at if created_at is not None else format_time(datetime.now(timezone.utc))
+        when = created_at if created_at is not None else format_time(datetime.now(UTC))
         self._conn.execute(
             """
             INSERT INTO runs (

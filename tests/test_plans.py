@@ -20,6 +20,7 @@ import urllib.request
 from datetime import UTC, datetime
 
 from review_grade.api import http as http_api
+from review_grade.api.gate import refuse
 from review_grade.api.plans import (
     ANNUAL_PRICING,
     CAP_REACHED_SET,
@@ -34,6 +35,8 @@ from review_grade.api.plans import (
     charge_for_review,
     charge_for_review_cents,
     format_cap_label,
+    format_cap_reached_zero,
+    format_included,
     format_reset_date,
     get_plan,
     has_legacy_trial_plan,
@@ -247,8 +250,13 @@ class PlanMathTests(unittest.TestCase):
 
     def test_cap_reached_copy_templates(self) -> None:
         self.assertEqual(
-            CAP_REACHED_ZERO.format(included=250),
+            format_cap_reached_zero(250),
             "You’ve used all 250 reviews in your plan this month. "
+            "To keep reviewing, set a monthly spending cap for extra reviews.",
+        )
+        self.assertEqual(
+            format_cap_reached_zero(FLEET.included_reviews),
+            "You’ve used all 2,500 reviews in your plan this month. "
             "To keep reviewing, set a monthly spending cap for extra reviews.",
         )
         self.assertEqual(
@@ -256,6 +264,8 @@ class PlanMathTests(unittest.TestCase):
             "You’ve reached your $12.99 monthly spending cap for extra reviews. "
             "Raise your cap to keep reviewing, or wait until 21 Nov 2026.",
         )
+        # Unused gate default stays the locked template (placeholders intact).
+        self.assertEqual(refuse("cap_reached").message, CAP_REACHED_ZERO)
         self.assertEqual(format_cap_label(1299), "$12.99")
         self.assertEqual(format_cap_label(100), "$1")
         self.assertEqual(
@@ -263,6 +273,29 @@ class PlanMathTests(unittest.TestCase):
             "21 Nov 2026",
         )
         self.assertEqual(reviews_left_this_period(DEVELOPER, 36), 214)
+
+    def test_included_count_uses_thousands_separators(self) -> None:
+        """Fleet and large counts render with commas; bare digits must not pass."""
+        cases = (
+            (2500, "2,500"),
+            (999, "999"),
+            (1_000_000, "1,000,000"),
+        )
+        for count, rendered in cases:
+            with self.subTest(count=count):
+                self.assertEqual(format_included(count), rendered)
+                message = format_cap_reached_zero(count)
+                self.assertEqual(
+                    message,
+                    f"You’ve used all {rendered} reviews in your plan this month. "
+                    "To keep reviewing, set a monthly spending cap for extra reviews.",
+                )
+                # Mutant that formats with bare ``{included}`` / ``str(count)`` fails.
+                if count >= 1000:
+                    self.assertNotIn(
+                        f"You’ve used all {count} reviews",
+                        message,
+                    )
 
 
 class PlanStoreAndApiTests(unittest.TestCase):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from review_grade.api.plans import CAP_REACHED_ZERO
+
 WINDOW_SECONDS = 60
 ACCEPT_LIMIT = 10
 _LINE_CAP = 8000
@@ -16,7 +18,7 @@ _GENERATED_SEGMENTS = frozenset({"snapshots", "vendor", "vendored"})
 _REFUSALS = {
     "bad_request": (400, "The review request is not valid."),
     "unauthorized": (401, "The API key is not valid."),
-    "cap_reached": (402, "The monthly spending cap for extra reviews is reached."),
+    "cap_reached": (402, CAP_REACHED_ZERO),
     "not_found": (404, "The run was not found."),
     "conflict": (409, "The idempotency key was already used for a different diff."),
     "too_large": (413, "The diff is too large to review."),

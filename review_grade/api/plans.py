@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Failed runs never bill. Status values match the runs table.
 _FAILED = "failed"
@@ -81,8 +81,8 @@ def get_plan(plan_id: str) -> Plan:
 
 def _as_utc(moment: datetime) -> datetime:
     if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
 
 
 def _clamp_day(year: int, month: int, day: int) -> int:
@@ -91,7 +91,7 @@ def _clamp_day(year: int, month: int, day: int) -> int:
 
 def _period_boundary(year: int, month: int, anchor_day: int) -> datetime:
     day = _clamp_day(year, month, anchor_day)
-    return datetime(year, month, day, 0, 0, 0, 0, tzinfo=timezone.utc)
+    return datetime(year, month, day, 0, 0, 0, 0, tzinfo=UTC)
 
 
 def add_one_month(moment: datetime, *, anchor_day: int | None = None) -> datetime:
@@ -132,7 +132,7 @@ def billing_period_start(
     """
     if not 1 <= anchor_day <= 31:
         raise ValueError("anchor_day must be in 1..31")
-    now = _as_utc(datetime.now(timezone.utc) if moment is None else moment)
+    now = _as_utc(datetime.now(UTC) if moment is None else moment)
     this = _period_boundary(now.year, now.month, anchor_day)
     if now >= this:
         return this
@@ -160,6 +160,20 @@ def format_cap_label(cap_cents: int) -> str:
     return f"${cap_cents / 100:.2f}"
 
 
+def format_included(count: int) -> str:
+    """Included-review count for copy, with thousands separators (``2,500``)."""
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise TypeError("count must be an int")
+    if count < 0:
+        raise ValueError("count must be >= 0")
+    return f"{count:,}"
+
+
+def format_cap_reached_zero(included: int) -> str:
+    """Render the zero-cap ``cap_reached`` message for ``included`` reviews."""
+    return CAP_REACHED_ZERO.format(included=format_included(included))
+
+
 def format_reset_date(moment: datetime) -> str:
     """Human reset date for cap copy, e.g. ``21 Nov 2026``."""
     moment = _as_utc(moment)
@@ -171,7 +185,7 @@ def usd_to_cents(cap_usd: float) -> int:
         raise TypeError("cap_usd must be a number")
     if cap_usd < 0:
         raise ValueError("cap_usd must be >= 0")
-    return int(round(cap_usd * 100))
+    return round(cap_usd * 100)
 
 
 # Back-compat alias used by older tests / comments.
