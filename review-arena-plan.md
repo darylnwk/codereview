@@ -82,8 +82,9 @@ Shown when the run is `done`. The page polls. The request does not wait on the m
 ### Auth and money
 
 - Magic link. Email in, link in, session cookie.
-- Stripe Checkout: card on file starts the one-month free trial on the chosen tier (Developer or Fleet). Set Stripe `trial_end` to the same day-of-month one month later, clamped (not `trial_period_days=30`). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0). Cap is stored as integer cents.
-- Account row: email, credits (legacy), plan, monthly_cap_cents, billing_anchor_day, Stripe customer id.
+- Stripe Checkout in **setup** mode (not a bare SetupIntent): card on file starts the one-month free trial on the chosen tier (Developer or Fleet). Hosted Checkout fits the existing Checkout copy and needs no new card form. On `checkout.session.completed`, set Stripe Subscription `trial_end` to the same day-of-month one month later, clamped (not `trial_period_days=30`), and set local `billing_anchor_day` from the card-add UTC day (replacing the day-1 default). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0). Cap is stored as integer cents and is not changed when the card is added.
+- Webhooks: `POST /v1/stripe/webhook` verifies `Stripe-Signature`; handling is idempotent by Stripe event id. Bad signature → 400. Replay → 200, no effect. Unknown event type → 200, no effect.
+- Account row: email, credits (legacy), plan, monthly_cap_cents, billing_anchor_day, card_on_file_at, trial_ends_at, Stripe customer id, Stripe subscription id.
 
 ### What the UI will not have in v1
 
@@ -205,9 +206,10 @@ Kill gate, before Stripe:
 
 ## Tables
 
-- `users(email, credits, stripe_customer_id, plan, monthly_cap_cents, billing_anchor_day)` — `credits` is legacy; default `monthly_cap_cents` is 0; legacy `monthly_cap_usd` if present is migrated ×100 and kept
+- `users(email, credits, stripe_customer_id, plan, monthly_cap_cents, billing_anchor_day, card_on_file_at, trial_ends_at, stripe_subscription_id)` — `credits` is legacy; default `monthly_cap_cents` is 0; legacy `monthly_cap_usd` if present is migrated ×100 and kept; `billing_anchor_day` starts at 1 and is set from the card-add day
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
+- `stripe_events(id, type, processed_at)` — webhook idempotency by Stripe event id
 
 Included reviews and the overage cap are counted per billing period from `runs`: `queued` + `done` since period start. Failed runs never count. Period boundaries follow `billing_anchor_day` (card-on-file day, clamped). Accept checks the count and inserts the queued row in one transaction so concurrent accepts cannot overrun the cap.
 

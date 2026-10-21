@@ -12,7 +12,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timezone
 
-from review_grade.api.plans import DEFAULT_MONTHLY_CAP_CENTS, billing_period_start
+from review_grade.api.plans import (
+    DEFAULT_MONTHLY_CAP_CENTS,
+    billing_period_start,
+    trial_ends_at,
+)
 
 SEED_EMAIL = "seed@reviewgrade.dev"
 _LIVE_PREFIX = "ra_live_"
@@ -28,8 +32,11 @@ _USER_COLUMNS = (
         "monthly_cap_cents",
         f"INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)}",
     ),
-    # TODO: set billing_anchor_day from card-add date when Stripe is wired.
+    # billing_anchor_day is set from the card-add date in record_card_on_file.
     ("billing_anchor_day", "INTEGER NOT NULL DEFAULT 1"),
+    ("card_on_file_at", "TEXT"),
+    ("trial_ends_at", "TEXT"),
+    ("stripe_subscription_id", "TEXT"),
 )
 
 _SCHEMA = f"""
@@ -40,7 +47,10 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id TEXT,
     plan TEXT NOT NULL DEFAULT 'developer',
     monthly_cap_cents INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)},
-    billing_anchor_day INTEGER NOT NULL DEFAULT 1  -- TODO: set from card-add date when Stripe is wired
+    billing_anchor_day INTEGER NOT NULL DEFAULT 1,
+    card_on_file_at TEXT,
+    trial_ends_at TEXT,
+    stripe_subscription_id TEXT
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY,
@@ -69,6 +79,11 @@ CREATE TABLE IF NOT EXISTS runs (
     omitted_pending TEXT,
     cache_read INTEGER,
     cache_write INTEGER
+);
+CREATE TABLE IF NOT EXISTS stripe_events (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    processed_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS runs_user_idempotency
     ON runs(user_id, idempotency_key)
@@ -115,6 +130,10 @@ class Billing:
     # queued + done in the current billing period (failed never count).
     period_reviews: int
     billing_anchor_day: int = 1
+    card_on_file_at: str | None = None
+    trial_ends_at: str | None = None
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
 
 
 class Store:
@@ -250,6 +269,100 @@ class Store:
                 """,
                 (next_plan, next_cap, next_anchor, user_id),
             )
+
+    def user_email(self, user_id: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT email FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return str(row["email"])
+
+    def stripe_customer_id(self, user_id: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT stripe_customer_id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None or row["stripe_customer_id"] is None:
+                return None
+            return str(row["stripe_customer_id"])
+
+    def set_stripe_customer_id(self, user_id: int, customer_id: str) -> None:
+        with self.transaction():
+            self._conn.execute(
+                "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
+                (customer_id, user_id),
+            )
+
+    def record_card_on_file(
+        self,
+        user_id: int,
+        card_on_file_at: datetime,
+        *,
+        stripe_customer_id: str,
+        stripe_subscription_id: str | None = None,
+    ) -> dict[str, object]:
+        """Set trial end and billing_anchor_day from the card-add instant.
+
+        Leaves ``monthly_cap_cents`` unchanged (default $0). Anchor day is the
+        UTC calendar day of ``card_on_file_at``.
+        """
+        if card_on_file_at.tzinfo is None:
+            moment = card_on_file_at.replace(tzinfo=UTC)
+        else:
+            moment = card_on_file_at.astimezone(UTC)
+        ends = trial_ends_at(moment)
+        anchor_day = moment.day
+        card_stamp = format_time(moment)
+        ends_stamp = format_time(ends)
+        with self.transaction():
+            before = self._billing(user_id, now=moment)
+            self._conn.execute(
+                """
+                UPDATE users
+                SET stripe_customer_id = ?,
+                    stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+                    card_on_file_at = ?,
+                    trial_ends_at = ?,
+                    billing_anchor_day = ?
+                WHERE id = ?
+                """,
+                (
+                    stripe_customer_id,
+                    stripe_subscription_id,
+                    card_stamp,
+                    ends_stamp,
+                    anchor_day,
+                    user_id,
+                ),
+            )
+            after = self._billing(user_id, now=moment)
+            if after.monthly_cap_cents != before.monthly_cap_cents:
+                raise RuntimeError("record_card_on_file must not change monthly_cap_cents")
+        return {
+            "billing_anchor_day": anchor_day,
+            "trial_ends_at": ends_stamp,
+            "card_on_file_at": card_stamp,
+            "monthly_cap_cents": after.monthly_cap_cents,
+        }
+
+    def claim_stripe_event(self, event_id: str, event_type: str) -> bool:
+        """Insert a Stripe event id. False when the id was already processed."""
+        with self.transaction():
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO stripe_events (id, type, processed_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (event_id, event_type, format_time(datetime.now(UTC))),
+                )
+            except sqlite3.IntegrityError:
+                return False
+            return True
 
     def idempotent_run(self, user_id: int, key: str) -> tuple[str, str] | None:
         with self._lock:
@@ -432,13 +545,14 @@ class Store:
         return int(row["id"])
 
     def _insert_user(self, email: str, credits: int) -> int:
-        # TODO: set billing_anchor_day from card-add date when Stripe is wired.
+        # billing_anchor_day stays 1 until record_card_on_file sets the card day.
         cursor = self._conn.execute(
             """
             INSERT INTO users (
                 email, credits, stripe_customer_id, plan,
-                monthly_cap_cents, billing_anchor_day
-            ) VALUES (?, ?, NULL, 'developer', ?, 1)
+                monthly_cap_cents, billing_anchor_day,
+                card_on_file_at, trial_ends_at, stripe_subscription_id
+            ) VALUES (?, ?, NULL, 'developer', ?, 1, NULL, NULL, NULL)
             """,
             (email, credits, int(DEFAULT_MONTHLY_CAP_CENTS)),
         )
@@ -493,7 +607,9 @@ class Store:
     def _billing(self, user_id: int, *, now: datetime | None = None) -> Billing:
         row = self._conn.execute(
             """
-            SELECT plan, monthly_cap_cents, billing_anchor_day
+            SELECT plan, monthly_cap_cents, billing_anchor_day,
+                   card_on_file_at, trial_ends_at,
+                   stripe_customer_id, stripe_subscription_id
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -508,6 +624,12 @@ class Store:
             int(row["monthly_cap_cents"]),
             period_reviews,
             anchor,
+            None if row["card_on_file_at"] is None else str(row["card_on_file_at"]),
+            None if row["trial_ends_at"] is None else str(row["trial_ends_at"]),
+            None if row["stripe_customer_id"] is None else str(row["stripe_customer_id"]),
+            None
+            if row["stripe_subscription_id"] is None
+            else str(row["stripe_subscription_id"]),
         )
 
     def _count_period_reviews(self, user_id: int, since: str) -> int:
