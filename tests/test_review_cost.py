@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from review_grade.api import worker as worker_api
 from review_grade.api.model_pricing import MODEL_PRICING
 from review_grade.api.review_cost import (
     AttemptCost,
@@ -459,8 +460,25 @@ class SettleAndReviewDiffCostTests(unittest.TestCase):
             self.assertIs(stored["charged"], False)
 
     def test_lost_claim_race_does_not_overwrite_winner_cost(self) -> None:
-        """Loser mark_done='lost' must not clobber the winner's cost row."""
+        """Loser mark_done='lost' must not clobber the winner's cost row.
+
+        M6: loser must make zero save/record calls (not charged=True behind IGNORE).
+        M4: winner settle must save exactly once.
+        """
         run_id = self._queue(name="race.py")
+        phase = {"name": "loser"}
+        save_calls: list[tuple[str, bool]] = []
+        record_calls: list[tuple[str, bool]] = []
+        real_save = self.store.save_review_cost
+        real_record = worker_api.record_review_cost
+
+        def spy_save(record) -> None:
+            save_calls.append((phase["name"], bool(record.charged)))
+            return real_save(record)
+
+        def spy_record(store, **kwargs):
+            record_calls.append((phase["name"], bool(kwargs.get("charged"))))
+            return real_record(store, **kwargs)
 
         def winner(_diff: str) -> dict:
             return dict(_FINDING)
@@ -468,7 +486,9 @@ class SettleAndReviewDiffCostTests(unittest.TestCase):
         def loser(_diff: str) -> dict:
             # First settler owns the claim; release so a second settler can win.
             self.store.release_queued_claims()
+            phase["name"] = "winner"
             self.assertTrue(settle_one(self.store, winner))
+            phase["name"] = "loser"
             winner_cost = self._cost(run_id)
             self.assertTrue(winner_cost["charged"])
             self.assertEqual(
@@ -477,7 +497,21 @@ class SettleAndReviewDiffCostTests(unittest.TestCase):
             )
             return dict(_FINDING)
 
-        self.assertTrue(settle_one(self.store, loser))
+        with (
+            patch.object(self.store, "save_review_cost", side_effect=spy_save),
+            patch.object(worker_api, "record_review_cost", side_effect=spy_record),
+        ):
+            self.assertTrue(settle_one(self.store, loser))
+
+        winner_saves = [charged for name, charged in save_calls if name == "winner"]
+        loser_saves = [charged for name, charged in save_calls if name == "loser"]
+        winner_records = [charged for name, charged in record_calls if name == "winner"]
+        loser_records = [charged for name, charged in record_calls if name == "loser"]
+        self.assertEqual(winner_saves, [True])
+        self.assertEqual(winner_records, [True])
+        self.assertEqual(loser_saves, [], "losing worker must not save_review_cost")
+        self.assertEqual(loser_records, [], "losing worker must not record_review_cost")
+
         stored = self._cost(run_id)
         self.assertIs(stored["charged"], True)
         self.assertEqual(self.store.get_run(self.key.user_id, run_id)["status"], "done")
@@ -493,6 +527,88 @@ class SettleAndReviewDiffCostTests(unittest.TestCase):
         )
         again = self._cost(run_id)
         self.assertIs(again["charged"], True)
+
+    def test_lost_after_failed_winner_cost_raise_leaves_no_charged_row(self) -> None:
+        """Winner failed + cost write raised (no row); loser must not insert charged=True."""
+        run_id = self._queue(name="fail-race.py")
+        phase = {"name": "loser"}
+        save_calls: list[tuple[str, bool]] = []
+        record_calls: list[tuple[str, bool]] = []
+        real_save = self.store.save_review_cost
+        real_record = worker_api.record_review_cost
+
+        def spy_save(record) -> None:
+            if phase["name"] == "winner":
+                raise RuntimeError("winner cost write failed")
+            save_calls.append((phase["name"], bool(record.charged)))
+            return real_save(record)
+
+        def spy_record(store, **kwargs):
+            if phase["name"] == "winner":
+                # Still invoke real path so save_review_cost raises inside it.
+                return real_record(store, **kwargs)
+            record_calls.append((phase["name"], bool(kwargs.get("charged"))))
+            return real_record(store, **kwargs)
+
+        def fail_review(_diff: str) -> object:
+            raise ProviderError("winner fails the review")
+
+        def loser(_diff: str) -> dict:
+            self.store.release_queued_claims()
+            phase["name"] = "winner"
+            self.assertTrue(settle_one(self.store, fail_review))
+            phase["name"] = "loser"
+            self.assertIsNone(self.store.get_review_cost(run_id))
+            self.assertEqual(
+                self.store.get_run(self.key.user_id, run_id)["status"],
+                "failed",
+            )
+            return dict(_FINDING)
+
+        with (
+            patch.object(self.store, "save_review_cost", side_effect=spy_save),
+            patch.object(worker_api, "record_review_cost", side_effect=spy_record),
+        ):
+            self.assertTrue(settle_one(self.store, loser))
+
+        self.assertEqual(save_calls, [], "loser must not save after a failed winner")
+        self.assertEqual(record_calls, [], "loser must not record after a failed winner")
+        self.assertIsNone(self.store.get_review_cost(run_id))
+        self.assertFalse(
+            any(charged for _name, charged in save_calls),
+            "nothing may be stored as charged=True",
+        )
+
+    def test_successful_settle_saves_review_cost_exactly_once(self) -> None:
+        """M4: a double record/save is hidden by INSERT OR IGNORE — count must be 1."""
+        run_id = self._queue(name="once-save.py")
+        real_save = self.store.save_review_cost
+        real_record = worker_api.record_review_cost
+        save_calls: list[bool] = []
+        record_calls: list[bool] = []
+
+        def spy_save(record) -> None:
+            save_calls.append(bool(record.charged))
+            return real_save(record)
+
+        def spy_record(store, **kwargs):
+            record_calls.append(bool(kwargs.get("charged")))
+            return real_record(store, **kwargs)
+
+        def finding(_diff: str) -> dict:
+            return dict(_FINDING)
+
+        with (
+            patch.object(self.store, "save_review_cost", side_effect=spy_save),
+            patch.object(worker_api, "record_review_cost", side_effect=spy_record),
+        ):
+            self.assertTrue(settle_one(self.store, finding))
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(len(record_calls), 1)
+        self.assertEqual(save_calls, [True])
+        self.assertEqual(record_calls, [True])
+        self.assertIs(self._cost(run_id)["charged"], True)
 
     def test_save_review_cost_raise_does_not_undo_settle(self) -> None:
         run_id = self._queue(name="raise.py")
