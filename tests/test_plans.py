@@ -20,7 +20,6 @@ import urllib.request
 from datetime import UTC, datetime
 
 from review_grade.api import http as http_api
-from review_grade.api.gate import Accepted
 from review_grade.api.plans import (
     ANNUAL_PRICING,
     DEFAULT_MONTHLY_CAP_CENTS,
@@ -413,9 +412,9 @@ class PlanStoreAndApiTests(unittest.TestCase):
             )
         )
 
-    def _cap_race_fixture(self, store: Store, credits: int = 5):
-        key = store.seed_account(credits)
-        auth = store.authenticate(key)
+    def _cap_race_fixture(self, store: Store, credits: int = 5) -> tuple[str, int]:
+        secret = store.seed_account(credits)
+        auth = store.authenticate(secret)
         assert auth is not None
         store.set_billing(auth.user_id, monthly_cap_usd=0)
         when = format_time(billing_period_start())
@@ -427,35 +426,33 @@ class PlanStoreAndApiTests(unittest.TestCase):
             created_at=when,
         )
         self.assertEqual(store.billing(auth.user_id).period_reviews, 249)
-        return auth
+        return secret, auth.user_id
 
-    def _accepted(self, index: int) -> Accepted:
-        digest = f"{index:064d}"
-        return Accepted(
-            202,
-            _added(f"race{index}.py", 1, "r"),
-            digest,
-            "api",
-            None,
-        )
+    def test_accept_review_cap_race_one_winner(self) -> None:
+        """Two accept_review threads at the cap; barrier between check and insert.
 
-    def test_split_cap_insert_races_every_time_with_barrier(self) -> None:
-        """Without one transaction, a barrier between check and insert overruns."""
+        With accept_review's transaction, one waiter times out on the barrier and
+        inserts; the other sees cap_reached. Mutating away that transaction must
+        make both insert (covered by the 20x harness in the PR body).
+        """
         store = Store(self.db)
         self.addCleanup(store.close)
-        auth = self._cap_race_fixture(store)
+        secret, user_id = self._cap_race_fixture(store)
         barrier = threading.Barrier(2)
-        http_api.after_cap_check = lambda: barrier.wait(timeout=2)
+
+        def hook() -> None:
+            try:
+                barrier.wait(timeout=1.0)
+            except threading.BrokenBarrierError:
+                return
+
+        http_api.after_cap_check = hook
         self.addCleanup(lambda: setattr(http_api, "after_cap_check", None))
         results: list[tuple[int, dict]] = []
 
         def worker(index: int) -> None:
-            status, body = http_api._queue_if_under_cap_split(
-                store,
-                auth,
-                self._accepted(index),
-                None,
-            )
+            raw = json.dumps({"diff": _added(f"race{index}.py", 1, "r")}).encode("utf-8")
+            status, body = http_api.accept_review(store, secret, None, raw)
             results.append((status, body))
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
@@ -463,41 +460,18 @@ class PlanStoreAndApiTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join(timeout=5)
-        self.assertEqual(len(results), 2, results)
-        self.assertTrue(all(status == 202 for status, _ in results), results)
-        self.assertEqual(store.billing(auth.user_id).period_reviews, 251)
-
-    def test_atomic_cap_insert_one_winner_with_barrier(self) -> None:
-        """With check+insert in one transaction, only one of two waiters wins."""
-        store = Store(self.db)
-        self.addCleanup(store.close)
-        auth = self._cap_race_fixture(store)
-        start = threading.Barrier(2)
-        results: list[tuple[int, dict]] = []
-
-        def worker(index: int) -> None:
-            start.wait(timeout=2)
-            with store.transaction():
-                status, body = http_api._queue_if_under_cap(
-                    store,
-                    auth,
-                    self._accepted(index),
-                    None,
-                )
-            results.append((status, body))
-
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
         self.assertEqual(len(results), 2, results)
         accepted = [body for status, body in results if status == 202]
         capped = [body for status, body in results if status == 402]
         self.assertEqual(len(accepted), 1, results)
         self.assertEqual(len(capped), 1, results)
         self.assertEqual(capped[0].get("error"), "cap_reached")
-        self.assertEqual(store.billing(auth.user_id).period_reviews, 250)
+        queued = store._conn.execute(
+            "SELECT COUNT(*) AS n FROM runs WHERE status = 'queued'"
+        ).fetchone()["n"]
+        self.assertEqual(int(queued), 1)
+        self.assertEqual(store.billing(user_id).period_reviews, 250)
 
     def test_drop_reviews_finished_tolerates_old_sqlite(self) -> None:
         store = Store(self.db)

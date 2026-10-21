@@ -115,43 +115,7 @@ def _queue_if_under_cap(
         idempotency_key=idempotency_key,
         omitted_pending=pending,
     )
-    return 202, {"run_id": run_id}
-
-
-def _queue_if_under_cap_split(
-    store: Store,
-    key: Key,
-    decision: Accepted,
-    idempotency_key: str | None,
-) -> tuple[int, dict]:
-    """Test-only: cap check and insert in separate transactions.
-
-    The ``after_cap_check`` hook runs in the gap so a barrier can force both
-    threads past the check before either inserts.
-    """
-    with store.transaction():
-        billing = store.billing(key.user_id)
-        plan = get_plan(billing.plan)
-        if not allow_next_review(plan, billing.period_reviews, billing.monthly_cap_usd):
-            denied = refuse("cap_reached")
-            return denied.status, _error_body(denied)
-    hook = after_cap_check
-    if hook is not None:
-        hook()
-    with store.transaction():
-        pending = None
-        if decision.omitted is not None:
-            pending = json.dumps(list(decision.omitted))
-        run_id = store.insert_queued(
-            user_id=key.user_id,
-            key_id=key.id,
-            diff_hash=decision.diff_hash,
-            diff_text=decision.kept_diff,
-            source=decision.source,
-            idempotency_key=idempotency_key,
-            omitted_pending=pending,
-        )
-        return 202, {"run_id": run_id}
+    return decision.status, {"run_id": run_id}
 
 
 def accept_review(
