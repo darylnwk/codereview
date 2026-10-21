@@ -40,7 +40,7 @@
 .ledger code { white-space: normal; word-break: break-word; }
 
 /* Pricing tiers */
-.tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-4); margin-top: var(--s-5); align-items: stretch; }
+.tiers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); margin-top: var(--s-5); align-items: stretch; max-width: 48rem; }
 .tier { position: relative; display: flex; flex-direction: column; gap: var(--s-4); padding: var(--s-6) var(--s-5); background: var(--c-carbon-2); border: 1px solid var(--c-line); border-radius: var(--r-2); }
 .tier.rv.in { transition: opacity var(--d-slow) var(--e-out), transform var(--d-base) var(--e-out), border-color var(--d-fast); }
 .tier.rv.in:hover { transform: translateY(-4px); border-color: var(--c-line-strong); }

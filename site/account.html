@@ -36,8 +36,8 @@
         <div class="bal__hero rv">
           <h1 id="bal-h" class="vh">Balance</h1>
           <p class="bal__num"><span id="left" class="count">214</span><span class="bal__unit">reviews left</span></p>
-          <p class="bal__plan"><span class="tag tag--mark" id="plan-tag">Month</span> <span id="plan-line">$25 for 250 reviews, $0.10 each. Then $0.15 a review.</span></p>
-          <p class="hint">Unused reviews end with the month. A failed review spends nothing.</p>
+          <p class="bal__plan"><span class="tag tag--mark" id="plan-tag">Developer · trial</span> <span id="plan-line">$25/month for 250 reviews. Then $0.15 a review. Mock data.</span></p>
+          <p class="hint">Mock account. Unused reviews end with the month. A failed review spends nothing. One month free after a card is on file.</p>
         </div>
 
         <div class="usage rv" style="--i:1">
@@ -45,13 +45,13 @@
           <div class="meterbar" aria-hidden="true"><i id="used-bar"></i></div>
           <p class="hint" id="used-line">36 of 250 are finished. Unused reviews end with the month.</p>
 
-          <div class="usage__row"><span class="meta">Spend so far</span><span class="usage__val" id="spend">$25.00</span></div>
-          <p class="hint" id="spend-line">$25.00 for the month, plus $0.00 over 250.</p>
+          <div class="usage__row"><span class="meta">Spend so far</span><span class="usage__val" id="spend">$0.00</span></div>
+          <p class="hint" id="spend-line">Trial month (mock): $0.00 base, plus $0.00 over 250.</p>
 
           <form id="cap-form" class="cap">
             <label for="cap" class="meta">Monthly cap on extra reviews</label>
-            <div class="cap__ctl"><span class="cap__sym" aria-hidden="true">$</span><input id="cap" class="input" name="cap" inputmode="numeric" autocomplete="off" value="50" aria-describedby="cap-line"><span class="hint">dollars</span></div>
-            <p class="hint" id="cap-line">After 250 reviews, each one is $0.15 until the extra charge reaches $50.</p>
+            <div class="cap__ctl"><span class="cap__sym" aria-hidden="true">$</span><input id="cap" class="input" name="cap" inputmode="numeric" autocomplete="off" value="0" aria-describedby="cap-line"><span class="hint">dollars</span></div>
+            <p class="hint" id="cap-line">250 reviews are included each month. Extra reviews are off until you set a monthly spending cap. Then each extra review costs $0.15, up to your cap.</p>
             <p class="hint cap__err" id="cap-note" role="status" hidden></p>
           </form>
         </div>
@@ -107,15 +107,15 @@
         <h2 id="bill-h" class="h2 rv">Billing</h2>
         <div class="bill rv" style="--i:1">
           <div>
-            <p id="bill-line">Month plan, $25 for 250 reviews. Renews [renewal date]. Payment and invoices are handled by Stripe.</p>
-            <p class="hint">Customer [Stripe customer id]</p>
+            <p id="bill-line">Developer plan (mock), $25 for 250 reviews. 1-month free trial after card on file. Renews [renewal date]. Payment and invoices are handled by Stripe.</p>
+            <p class="hint">Customer [Stripe customer id] · mock data only</p>
           </div>
           <div class="bill__cta">
-            <a class="btn btn--mark" id="upgrade" href="#" hidden>Upgrade to Month, $25 <span class="arr" aria-hidden="true">→</span></a>
+            <a class="btn btn--mark" id="upgrade" href="#">Upgrade to Fleet, $199 <span class="arr" aria-hidden="true">→</span></a>
             <a class="btn" id="manage" href="#">Manage billing on Stripe <span class="arr" aria-hidden="true">↗</span></a>
           </div>
         </div>
-        <p class="hint rv">[Placeholder links: Stripe Checkout and Customer Portal URLs are not wired.] <button class="btn btn--quiet link" type="button" id="plan-toggle">Preview as Trial</button></p>
+        <p class="hint rv">[Placeholder links: Stripe Checkout and Customer Portal URLs are not wired.] <button class="btn btn--quiet link" type="button" id="plan-toggle">Preview as Fleet (mock)</button></p>
       </div>
     </section>
   </main>

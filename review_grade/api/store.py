@@ -10,7 +10,9 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
+
+from review_grade.api.plans import DEFAULT_MONTHLY_CAP_CENTS, billing_period_start
 
 SEED_EMAIL = "seed@reviewgrade.dev"
 _LIVE_PREFIX = "ra_live_"
@@ -20,13 +22,25 @@ _RUN_COLUMNS = (
     ("cache_read", "INTEGER"),
     ("cache_write", "INTEGER"),
 )
+_USER_COLUMNS = (
+    ("plan", "TEXT NOT NULL DEFAULT 'developer'"),
+    (
+        "monthly_cap_cents",
+        f"INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)}",
+    ),
+    # TODO: set billing_anchor_day from card-add date when Stripe is wired.
+    ("billing_anchor_day", "INTEGER NOT NULL DEFAULT 1"),
+)
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     email TEXT UNIQUE,
     credits INTEGER NOT NULL,
-    stripe_customer_id TEXT
+    stripe_customer_id TEXT,
+    plan TEXT NOT NULL DEFAULT 'developer',
+    monthly_cap_cents INTEGER NOT NULL DEFAULT {int(DEFAULT_MONTHLY_CAP_CENTS)},
+    billing_anchor_day INTEGER NOT NULL DEFAULT 1  -- TODO: set from card-add date when Stripe is wired
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     id INTEGER PRIMARY KEY,
@@ -93,6 +107,15 @@ class Key:
     user_id: int
 
 
+@dataclass(frozen=True)
+class Billing:
+    plan: str
+    monthly_cap_cents: int
+    # queued + done in the current billing period (failed never count).
+    period_reviews: int
+    billing_anchor_day: int = 1
+
+
 class Store:
     def __init__(self, path: str) -> None:
         self._conn = sqlite3.connect(
@@ -107,6 +130,7 @@ class Store:
         self._conn.execute("PRAGMA journal_mode = WAL").fetchone()
         self._conn.executescript(_SCHEMA)
         self._ensure_run_columns()
+        self._ensure_user_columns()
 
     def close(self) -> None:
         self._conn.close()
@@ -116,6 +140,33 @@ class Store:
         for name, decl in _RUN_COLUMNS:
             if name not in have:
                 self._conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
+
+    def _ensure_user_columns(self) -> None:
+        have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
+        added_cents = False
+        for name, decl in _USER_COLUMNS:
+            if name not in have:
+                self._conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
+                if name == "monthly_cap_cents":
+                    added_cents = True
+        have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
+        if added_cents and "monthly_cap_usd" in have:
+            # One-shot: preserve dollar values as cents. Leave monthly_cap_usd in place.
+            self._conn.execute(
+                "UPDATE users SET monthly_cap_cents = monthly_cap_usd * 100"
+            )
+        self._drop_reviews_finished_column()
+
+    def _drop_reviews_finished_column(self) -> None:
+        """Remove the lifetime counter if present. No-op on SQLite < 3.35."""
+        have = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(users)")}
+        if "reviews_finished" not in have:
+            return
+        try:
+            self._conn.execute("ALTER TABLE users DROP COLUMN reviews_finished")
+        except sqlite3.OperationalError:
+            # DROP COLUMN needs SQLite 3.35+. Leave the unused column.
+            return
 
     @contextmanager
     def transaction(self):
@@ -163,6 +214,42 @@ class Store:
         with self._lock:
             return self._credits(user_id)
 
+    def billing(self, user_id: int, *, now: datetime | None = None) -> Billing:
+        with self._lock:
+            return self._billing(user_id, now=now)
+
+    def set_billing(
+        self,
+        user_id: int,
+        *,
+        plan: str | None = None,
+        monthly_cap_cents: int | None = None,
+        billing_anchor_day: int | None = None,
+    ) -> None:
+        with self.transaction():
+            row = self._billing(user_id)
+            next_plan = row.plan if plan is None else plan
+            next_cap = row.monthly_cap_cents if monthly_cap_cents is None else monthly_cap_cents
+            next_anchor = (
+                row.billing_anchor_day if billing_anchor_day is None else billing_anchor_day
+            )
+            if not isinstance(next_cap, int) or isinstance(next_cap, bool):
+                raise TypeError("monthly_cap_cents must be an int")
+            if next_cap < 0:
+                raise ValueError("monthly_cap_cents must be >= 0")
+            if not isinstance(next_anchor, int) or isinstance(next_anchor, bool):
+                raise TypeError("billing_anchor_day must be an int")
+            if not 1 <= next_anchor <= 31:
+                raise ValueError("billing_anchor_day must be in 1..31")
+            self._conn.execute(
+                """
+                UPDATE users
+                SET plan = ?, monthly_cap_cents = ?, billing_anchor_day = ?
+                WHERE id = ?
+                """,
+                (next_plan, next_cap, next_anchor, user_id),
+            )
+
     def idempotent_run(self, user_id: int, key: str) -> tuple[str, str] | None:
         with self._lock:
             return self._idempotent_run(user_id, key)
@@ -185,6 +272,7 @@ class Store:
         source: str,
         idempotency_key: str | None,
         omitted_pending: str | None = None,
+        created_at: str | None = None,
     ) -> str:
         with self._lock:
             return self._insert_queued(
@@ -195,6 +283,7 @@ class Store:
                 source=source,
                 idempotency_key=idempotency_key,
                 omitted_pending=omitted_pending,
+                created_at=created_at,
             )
 
     def release_queued_claims(self) -> None:
@@ -317,25 +406,7 @@ class Store:
             ).fetchone()
             if owned is None:
                 return "lost"
-            credited = self._conn.execute(
-                """
-                UPDATE users
-                SET credits = credits - 1
-                WHERE id = ? AND credits > 0
-                """,
-                (user_id,),
-            ).rowcount
-            if credited != 1:
-                self._close(
-                    run_id,
-                    token,
-                    status="failed",
-                    findings_json=None,
-                    cost_usd=None,
-                    partial=0,
-                    omitted_json=None,
-                )
-                return "failed"
+            # credits is legacy and unused for access; period/cap gating lives in accept.
             closed = self._close(
                 run_id,
                 token,
@@ -346,7 +417,7 @@ class Store:
                 omitted_json=omitted_json,
             )
             if closed != 1:
-                raise RuntimeError("queued run disappeared after the credit update")
+                raise RuntimeError("queued run disappeared while marking done")
             return "done"
 
     def _user_id(self, email: str) -> int | None:
@@ -356,9 +427,15 @@ class Store:
         return int(row["id"])
 
     def _insert_user(self, email: str, credits: int) -> int:
+        # TODO: set billing_anchor_day from card-add date when Stripe is wired.
         cursor = self._conn.execute(
-            "INSERT INTO users (email, credits, stripe_customer_id) VALUES (?, ?, NULL)",
-            (email, credits),
+            """
+            INSERT INTO users (
+                email, credits, stripe_customer_id, plan,
+                monthly_cap_cents, billing_anchor_day
+            ) VALUES (?, ?, NULL, 'developer', ?, 1)
+            """,
+            (email, credits, int(DEFAULT_MONTHLY_CAP_CENTS)),
         )
         return int(cursor.lastrowid)
 
@@ -408,6 +485,39 @@ class Store:
             return 0
         return int(row["credits"])
 
+    def _billing(self, user_id: int, *, now: datetime | None = None) -> Billing:
+        row = self._conn.execute(
+            """
+            SELECT plan, monthly_cap_cents, billing_anchor_day
+            FROM users WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return Billing("developer", int(DEFAULT_MONTHLY_CAP_CENTS), 0, 1)
+        anchor = int(row["billing_anchor_day"])
+        since = format_time(billing_period_start(now, anchor_day=anchor))
+        period_reviews = self._count_period_reviews(user_id, since)
+        return Billing(
+            str(row["plan"]),
+            int(row["monthly_cap_cents"]),
+            period_reviews,
+            anchor,
+        )
+
+    def _count_period_reviews(self, user_id: int, since: str) -> int:
+        """Billable in-period runs: accepted (queued) and done. Failed never count."""
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM runs
+            WHERE user_id = ?
+              AND created_at >= ?
+              AND status IN ('queued', 'done')
+            """,
+            (user_id, since),
+        ).fetchone()
+        return int(row["n"])
+
     def _idempotent_run(self, user_id: int, key: str) -> tuple[str, str] | None:
         row = self._conn.execute(
             "SELECT id, diff_hash FROM runs WHERE user_id = ? AND idempotency_key = ?",
@@ -440,8 +550,10 @@ class Store:
         source: str,
         idempotency_key: str | None,
         omitted_pending: str | None,
+        created_at: str | None,
     ) -> str:
         run_id = "run_" + secrets.token_urlsafe(12)
+        when = created_at if created_at is not None else format_time(datetime.now(UTC))
         self._conn.execute(
             """
             INSERT INTO runs (
@@ -458,7 +570,7 @@ class Store:
                 diff_text,
                 source,
                 idempotency_key,
-                format_time(datetime.now(timezone.utc)),
+                when,
                 omitted_pending,
             ),
         )
