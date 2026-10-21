@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from review_grade.api import worker as worker_api
-from review_grade.api.model_pricing import MODEL_PRICING
+from review_grade.api.model_pricing import MODEL_PRICING, UNKNOWN_PRICING
 from review_grade.api.review_cost import (
     AttemptCost,
     AttemptUsage,
@@ -31,7 +31,7 @@ from review_grade.api.worker import settle_one
 from review_grade.reviewer import ProviderError, _usage_from_cli_body, review_diff
 from review_grade.rubric import assemble_prompt
 
-# Test-only rates. Not production prices — production map stays TODO placeholders.
+# Test-only rates. Not production prices.
 _TEST_PRICING = {
     "test-model": {
         "input_usd_per_mtok": 1.0,
@@ -42,6 +42,11 @@ _TEST_PRICING = {
         "input_usd_per_mtok": 3.0,
         "output_usd_per_mtok": 4.0,
         "source": "test fixture — not a provider price",
+    },
+    "test-model-unpriced": {
+        "input_usd_per_mtok": None,
+        "output_usd_per_mtok": None,
+        "source": "test fixture — placeholder rates",
     },
 }
 
@@ -177,14 +182,14 @@ class ReviewCostBehaviourTests(unittest.TestCase):
         self.assertTrue(zero.usage_known)
         self.assertTrue(zero.priced)
 
-        todo = build_attempt(
-            known_usage("grok-4.7-build-fast", input_tokens=100, output_tokens=0),
-            pricing=MODEL_PRICING,
+        unpriced = build_attempt(
+            known_usage("test-model-unpriced", input_tokens=100, output_tokens=0),
+            pricing=_TEST_PRICING,
         )
-        self.assertEqual(todo.input_tokens, 100)
-        self.assertIsNone(todo.cost_usd)
-        self.assertTrue(todo.usage_known)
-        self.assertFalse(todo.priced)
+        self.assertEqual(unpriced.input_tokens, 100)
+        self.assertIsNone(unpriced.cost_usd)
+        self.assertTrue(unpriced.usage_known)
+        self.assertFalse(unpriced.priced)
 
         missing = build_attempt(
             known_usage("no-such-model", input_tokens=10, output_tokens=1),
@@ -206,14 +211,6 @@ class ReviewCostBehaviourTests(unittest.TestCase):
         )
         self.assertIsNone(mixed.total_cost_usd)
         self.assertFalse(mixed.attempts[1].usage_known)
-
-    def test_production_pricing_map_is_todo_placeholders(self) -> None:
-        self.assertIn("grok-4.7-build-fast", MODEL_PRICING)
-        for model, rates in MODEL_PRICING.items():
-            with self.subTest(model=model):
-                self.assertIsNone(rates["input_usd_per_mtok"])
-                self.assertIsNone(rates["output_usd_per_mtok"])
-                self.assertTrue(str(rates["source"]).startswith("TODO:"))
 
     def test_store_round_trip_keeps_attempt_costs(self) -> None:
         usages = [
@@ -667,5 +664,42 @@ class KnownUsageValidationTests(unittest.TestCase):
             known_usage("test-model", input_tokens=0, output_tokens=-2)
 
 
+class ProductionPricingMapTests(unittest.TestCase):
+    def test_every_configured_model_is_priced_or_explicitly_unknown(self) -> None:
+        self.assertIsInstance(UNKNOWN_PRICING, frozenset)
+        for model in UNKNOWN_PRICING:
+            with self.subTest(unknown=model):
+                self.assertIn(model, MODEL_PRICING)
+                rates = MODEL_PRICING[model]
+                self.assertIsNone(rates["input_usd_per_mtok"])
+                self.assertIsNone(rates["output_usd_per_mtok"])
+                self.assertIn("unknown", str(rates["source"]).lower())
+
+        for model, rates in MODEL_PRICING.items():
+            with self.subTest(model=model):
+                if model in UNKNOWN_PRICING:
+                    continue
+                self.assertIsNotNone(rates["input_usd_per_mtok"])
+                self.assertIsNotNone(rates["output_usd_per_mtok"])
+                self.assertGreater(rates["input_usd_per_mtok"], 0.0)
+                self.assertGreater(rates["output_usd_per_mtok"], 0.0)
+                self.assertFalse(str(rates["source"]).startswith("TODO:"))
+                self.assertIn("2026-10-21", rates["source"])
+                priced = build_attempt(
+                    known_usage(model, input_tokens=1_000_000, output_tokens=0),
+                    pricing=MODEL_PRICING,
+                )
+                self.assertTrue(priced.priced)
+                self.assertEqual(priced.cost_usd, rates["input_usd_per_mtok"])
+
+    def test_reviewer_models_are_present_in_pricing_map(self) -> None:
+        from review_grade.reviewer import HAIKU_MODEL, REVIEWER_MODEL, SONNET_MODEL
+
+        for model in (REVIEWER_MODEL, SONNET_MODEL, HAIKU_MODEL):
+            with self.subTest(model=model):
+                self.assertIn(model, MODEL_PRICING)
+
+
 if __name__ == "__main__":
     unittest.main()
+
