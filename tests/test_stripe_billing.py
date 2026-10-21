@@ -6,23 +6,29 @@ that implements them is removed.
 
 from __future__ import annotations
 
+import io
 import json
+import logging
+import os
 import sqlite3
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest import mock
 from urllib.parse import parse_qs
 
 import review_grade.api.store as store_mod
+from review_grade.api.__main__ import main as api_main
 from review_grade.api.http import bind, receive_stripe_webhook
 from review_grade.api.plans import (
     DEFAULT_MONTHLY_CAP_CENTS,
     DEVELOPER,
+    FLEET,
     charge_for_review_cents,
     trial_ends_at,
 )
 from review_grade.api.store import Store
-from review_grade.api.plans import FLEET
 from review_grade.api.stripe_billing import (
     ENV_CANCEL_URL,
     ENV_PRICE_DEVELOPER,
@@ -659,6 +665,10 @@ class EnvLoaderTests(unittest.TestCase):
             ("empty", ""),
             ("garbage", "not-a-stripe-key"),
             ("sk_test_without_trailing_underscore", "sk_test"),
+            # Allowed prefix must be at the start, not merely contained.
+            ("allowed_prefix_after_live", "sk_live_sk_test_x"),
+            ("allowed_prefix_not_at_start", "xsk_test_abc"),
+            ("leading_space_before_rk_test", " rk_test_x"),
         )
         for label, key in refused:
             with self.subTest(label=label):
@@ -671,9 +681,15 @@ class EnvLoaderTests(unittest.TestCase):
                 with self.assertRaises(LiveModeRefused):
                     StripeClient(key)
                 if key:
-                    # Non-empty refused values fail at load time too.
-                    with self.assertRaises(LiveModeRefused):
-                        load_stripe_env(_full_stripe_env(key))
+                    # load_stripe_env strips; leading-space keys become allowed after strip.
+                    stripped = key.strip()
+                    if stripped.startswith(("sk_test_", "rk_test_")):
+                        loaded = load_stripe_env(_full_stripe_env(key))
+                        assert loaded is not None
+                        self.assertEqual(loaded.secret_key, stripped)
+                    else:
+                        with self.assertRaises(LiveModeRefused):
+                            load_stripe_env(_full_stripe_env(key))
                 else:
                     # Empty STRIPE_SECRET_KEY is treated as unset (incomplete env).
                     self.assertIsNone(load_stripe_env(_full_stripe_env("")))
@@ -762,10 +778,11 @@ class ConfiguredPriceValidationTests(unittest.TestCase):
 
     def test_missing_price_fails(self) -> None:
         env = self._env()
+        secret_body = {"error": {"message": "No such price SECRET_BODY_TOKEN"}}
 
         def fetch(price_id: str) -> dict:
             if price_id == env.price_fleet:
-                raise StripeError(404, {"error": {"message": "No such price"}})
+                raise StripeError(404, secret_body)
             return _matching_price("developer", price_id)
 
         with self.assertRaises(StripePriceMismatch) as ctx:
@@ -773,6 +790,89 @@ class ConfiguredPriceValidationTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("could not be fetched", message)
         self.assertIn(env.price_fleet, message)
+        self.assertIn("HTTP 404", message)
+        self.assertNotIn("SECRET_BODY_TOKEN", message)
+        self.assertNotIn("No such price", message)
+
+
+class MainStartupValidationTests(unittest.TestCase):
+    """Startup path through ``review_grade.api.__main__.main`` (no real server)."""
+
+    _ARGV = ("--db", "/tmp/stripe-startup-test.sqlite", "--port", "0", "--no-worker")
+
+    def _fake_httpd(self) -> SimpleNamespace:
+        store = SimpleNamespace(close=lambda: None)
+        return SimpleNamespace(
+            price_cap=False,
+            store=store,
+            serve_forever=lambda: None,
+            server_close=lambda: None,
+        )
+
+    def test_mismatched_price_raises_before_bind(self) -> None:
+        env = _full_stripe_env("sk_test_startup_mismatch")
+
+        def bad_retrieve(price_id: str) -> dict:
+            price = _matching_price(
+                "developer" if price_id == env[ENV_PRICE_DEVELOPER] else "fleet",
+                price_id,
+            )
+            price["unit_amount"] = 1
+            return price
+
+        bind_mock = mock.Mock()
+        client = mock.Mock()
+        client.retrieve_price.side_effect = bad_retrieve
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("review_grade.api.__main__.StripeClient", return_value=client):
+                with mock.patch("review_grade.api.__main__.bind", bind_mock):
+                    with self.assertRaises(StripePriceMismatch):
+                        api_main(list(self._ARGV))
+        bind_mock.assert_not_called()
+
+    def test_matching_price_reaches_bind(self) -> None:
+        env = _full_stripe_env("sk_test_startup_match")
+        httpd = self._fake_httpd()
+        bind_mock = mock.Mock(return_value=httpd)
+
+        def good_retrieve(price_id: str) -> dict:
+            plan = (
+                "developer" if price_id == env[ENV_PRICE_DEVELOPER] else "fleet"
+            )
+            return _matching_price(plan, price_id)
+
+        client = mock.Mock()
+        client.retrieve_price.side_effect = good_retrieve
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("review_grade.api.__main__.StripeClient", return_value=client):
+                with mock.patch("review_grade.api.__main__.bind", bind_mock):
+                    api_main(list(self._ARGV))
+        bind_mock.assert_called_once()
+        self.assertTrue(httpd.price_cap)
+
+    def test_refused_key_absent_from_exception_and_stderr(self) -> None:
+        unique = "sk_live_MAIN_PATH_NEVER_ECHO_7c2e"
+        env = _full_stripe_env(unique)
+        bind_mock = mock.Mock()
+        stderr = io.StringIO()
+        log_capture = io.StringIO()
+        handler = logging.StreamHandler(log_capture)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch("review_grade.api.__main__.bind", bind_mock):
+                    with mock.patch("sys.stderr", stderr):
+                        with self.assertRaises(LiveModeRefused) as ctx:
+                            api_main(list(self._ARGV))
+        finally:
+            root.removeHandler(handler)
+        message = str(ctx.exception)
+        self.assertNotIn(unique, message)
+        self.assertNotIn("NEVER_ECHO", message)
+        self.assertNotIn(unique, stderr.getvalue())
+        self.assertNotIn(unique, log_capture.getvalue())
+        bind_mock.assert_not_called()
 
 
 class StripeHttpFormTests(unittest.TestCase):

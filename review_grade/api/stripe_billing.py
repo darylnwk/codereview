@@ -24,7 +24,7 @@ from typing import Any
 
 from review_grade.api.plans import PLANS, get_plan, trial_ends_at
 from review_grade.api.store import Store
-from review_grade.api.stripe_http import StripeClient, refuse_live_secret_key
+from review_grade.api.stripe_http import StripeClient, StripeError, refuse_live_secret_key
 
 # Env var names (values never set by this package; see docs/stripe-env.md).
 ENV_SECRET_KEY = "STRIPE_SECRET_KEY"
@@ -117,9 +117,13 @@ def validate_configured_prices(
         except StripePriceMismatch:
             raise
         except Exception as exc:
+            if isinstance(exc, StripeError):
+                detail = f"HTTP {exc.status}"
+            else:
+                detail = type(exc).__name__
             raise StripePriceMismatch(
                 f"{env_name} price {price_id!r} could not be fetched for plan "
-                f"{plan_id!r}: {exc}"
+                f"{plan_id!r}: {detail}"
             ) from exc
         if not isinstance(price, Mapping):
             raise StripePriceMismatch(
