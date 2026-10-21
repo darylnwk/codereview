@@ -7,11 +7,13 @@ that implements them is removed.
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
+import review_grade.api.store as store_mod
 from review_grade.api.http import bind, receive_stripe_webhook
 from review_grade.api.plans import (
     DEFAULT_MONTHLY_CAP_CENTS,
@@ -40,6 +42,33 @@ from review_grade.api.stripe_http import LiveModeRefused, StripeClient, StripeEr
 
 _WEBHOOK_SECRET = "whsec_test_secret_for_unit_tests_only"
 _PRICES = {"developer": "price_dev_test", "fleet": "price_fleet_test"}
+
+
+def _stripe_event_row(db_path: str, event_id: str) -> sqlite3.Row | None:
+    """Read ``stripe_events`` directly so dedupe cannot be faked in Store memory."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT id, type, processed_at FROM stripe_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def _clear_in_process_event_claims() -> None:
+    """Clear module/class-level sets so only sqlite-backed claim survives.
+
+    A mutant that replaces ``claim_stripe_event`` with a module-level ``set``
+    would still look like a duplicate after Store reopen unless this runs.
+    """
+    for obj in (store_mod, getattr(store_mod, "Store", None)):
+        if obj is None:
+            continue
+        for _name, value in list(vars(obj).items()):
+            if isinstance(value, set):
+                value.clear()
 
 
 class FakeStripeTransport:
@@ -383,18 +412,34 @@ class WebhookSignatureAndIdempotencyTests(unittest.TestCase):
         self.assertEqual(again.stripe_subscription_id, "sub_test_1")
 
     def test_replay_after_reopen_store_is_duplicate(self) -> None:
-        """Persisted event ids must survive close/reopen (not only in-memory).
+        """Persisted event ids must survive close/reopen with in-process state cleared.
 
-        Mutant that only dedupes in process memory would apply twice after reopen.
+        (a) Deliver a signed event, assert the ``stripe_events`` row in sqlite,
+        open a NEW Store on the same file after clearing module-level claim
+        sets, replay, and assert duplicate with no second subscription or card
+        update. A mutant that only dedupes in a module-level ``set`` fails once
+        that set is cleared.
         """
-        payload = _checkout_completed_event(event_id="evt_persist", user_id=self.user_id)
+        event_id = "evt_persist"
+        payload = _checkout_completed_event(event_id=event_id, user_id=self.user_id)
         header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=1_700_000_000)
         first, body1 = self._post(payload, header)
         self.assertEqual(first, 200)
         self.assertTrue(body1.get("applied"))
         self.assertEqual(self.transport.subscriptions, 1)
+        row = _stripe_event_row(self.tmp.name, event_id)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["id"], event_id)
+        self.assertEqual(row["type"], "checkout.session.completed")
+        self.assertTrue(str(row["processed_at"]))
+        before = self.store.billing(self.user_id, now=self.card_at)
+        self.assertEqual(before.stripe_subscription_id, "sub_test_1")
+        self.assertEqual(before.billing_anchor_day, 31)
+        self.assertIsNotNone(before.card_on_file_at)
         db_path = self.tmp.name
         self.store.close()
+        _clear_in_process_event_claims()
         reopened = Store(db_path)
         try:
             second, body2 = handle_stripe_webhook(
@@ -410,13 +455,47 @@ class WebhookSignatureAndIdempotencyTests(unittest.TestCase):
             self.assertEqual(second, 200)
             self.assertTrue(body2.get("duplicate"))
             self.assertEqual(self.transport.subscriptions, 1)
-            billing = reopened.billing(self.user_id, now=self.card_at)
-            self.assertEqual(billing.stripe_subscription_id, "sub_test_1")
-            self.assertEqual(billing.billing_anchor_day, 31)
+            after = reopened.billing(self.user_id, now=self.card_at)
+            self.assertEqual(after.stripe_subscription_id, before.stripe_subscription_id)
+            self.assertEqual(after.card_on_file_at, before.card_on_file_at)
+            self.assertEqual(after.trial_ends_at, before.trial_ends_at)
+            self.assertEqual(after.billing_anchor_day, before.billing_anchor_day)
+            self.assertEqual(_stripe_event_row(db_path, event_id)["id"], event_id)
         finally:
             reopened.close()
             # tearDown also closes self.store; reopen a handle so tearDown is safe.
             self.store = Store(db_path)
+
+    def test_preinserted_stripe_event_id_is_duplicate(self) -> None:
+        """(b) A row already in ``stripe_events`` must short-circuit the webhook.
+
+        Pre-insert the event id without calling ``claim_stripe_event``, clear
+        in-process sets, then deliver the signed event. Memory-only dedupe
+        would apply a subscription; sqlite claim must report duplicate.
+        """
+        event_id = "evt_preinserted"
+        db_path = self.tmp.name
+        with self.store.transaction():
+            self.store._conn.execute(
+                """
+                INSERT INTO stripe_events (id, type, processed_at)
+                VALUES (?, ?, ?)
+                """,
+                (event_id, "checkout.session.completed", "2026-01-01T00:00:00.000000Z"),
+            )
+        self.assertIsNotNone(_stripe_event_row(db_path, event_id))
+        _clear_in_process_event_claims()
+        payload = _checkout_completed_event(event_id=event_id, user_id=self.user_id)
+        header = sign_payload(payload, _WEBHOOK_SECRET, timestamp=1_700_000_000)
+        status, body = self._post(payload, header)
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("duplicate"))
+        self.assertEqual(self.transport.subscriptions, 0)
+        billing = self.store.billing(self.user_id, now=self.card_at)
+        self.assertIsNone(billing.card_on_file_at)
+        self.assertIsNone(billing.trial_ends_at)
+        self.assertIsNone(billing.stripe_subscription_id)
+        self.assertEqual(billing.billing_anchor_day, 1)
 
     def test_unknown_event_type_returns_200_with_no_effect(self) -> None:
         body = {
