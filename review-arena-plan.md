@@ -18,29 +18,36 @@ The chat is not the product. The browser is one client. The API is the product.
 
 The unit sold is a review, not access to a model.
 
+Pricing decided by Daryl, 21 Oct 2026. No annual pricing. The old per-email free-review trial is removed.
+
 | Offer | Price | What they get |
 | --- | --- | --- |
-| Trial | $0 | 20 reviews, once per email. Enough to see a day of pull requests, not enough to leave running in CI |
-| Month | $25 | 250 reviews, which is $0.10 each. Unused reviews end with the month |
-| Each review after that | $0.15 | Same balance, until the monthly cap they set. The cap starts at $50 |
+| Trial | 1 month free | On **all** tiers. Starts when the user adds a card through Stripe. Ends one month later on the same day-of-month, clamped at month end (21 Oct → 21 Nov; 31 Jan → 28/29 Feb). That day is the billing-period anchor. Billing starts after that month unless cancelled |
+| Developer | $25 / month | 250 reviews included, then $0.15 per extra review. User-set monthly cap on extras (default **$0** — no overage until they set a cap) |
+| Fleet | $199 / month | 2,500 reviews included, then $0.06 per extra review. User-set monthly cap on extras (default **$0**) |
 
-A finished review outside the month is $0.15. The month is the cheaper rate: 250 reviews for $25 is $0.10 each. There is no single-review product and no pack of ten.
+**Default overage cap $0** on all tiers — decided by Daryl, 21 Oct 2026. After included reviews, accept returns `cap_reached` until the user sets a positive monthly cap.
 
-Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents. Refuse any run projected over $0.15. The month only stays profitable if a typical run stays under $0.10.
+Unused included reviews end with the month. There is no single-review product and no pack of ten. Failed runs are free.
 
-They pay because CI or their agent gets a structured review back, with a run id and a credit receipt. A chat will also review a diff. It will not sit in the pipeline.
+Cost of a run is one reviewer call. Gemini 3.8 Flash or Grok 4 Fast. The rubric is cached. The diff is not. A typical run should land at a few cents. Refuse any run projected over $0.15. Developer stays profitable if a typical run stays under $0.10.
+
+Note (not a ship blocker): the 12 Oct discussion aimed for Fleet per-run cost under ~$0.04 once real `cache_read` / `cache_write` logging exists. Fleet stays in the offer; fill cache columns later to measure.
+
+They pay because CI or their agent gets a structured review back, with a run id. A chat will also review a diff. It will not sit in the pipeline.
 
 What does not sell:
 
 - Unlimited monthly chat.
 - A recall number on their diff.
 - A GitHub App that comments for them. The Action is enough.
+- Annual plans.
 
 Expansion only after 5 of 10 trial users run a second review:
 
-- Shared balance for a team, at the same prices. $25 a month, then $0.15 a review.
+- Shared balance for a team, at the same tier prices.
 
-Refund rule: if the reviewer fails, do not decrement the credit. The decrement is conditional, in the same transaction as the flip to `done`. The update matches a user row only when credits are greater than 0. If that update changes no row, the run is `failed` and credits stay 0.
+Access is gated by the per-period included/overage cap, not the legacy `credits` column (kept on `users` but not decremented on finish).
 
 ## User interface
 
@@ -48,7 +55,7 @@ Three screens. No practice list. No dashboard. No review box.
 
 ### 1. Review
 
-- Header: credits remaining, "$0.15 a review", "A month is $25 for 250", link to Keys.
+- Header: reviews left this period, plan line (Developer or Fleet), overage rate, link to Keys.
 - One input: the diff (paste or file).
 - Size line under the diff: changed lines, and the largest files.
 - Submit disabled until the diff is non-empty, or until it is over the hard cap.
@@ -75,8 +82,8 @@ Shown when the run is `done`. The page polls. The request does not wait on the m
 ### Auth and money
 
 - Magic link. Email in, link in, session cookie.
-- Stripe Checkout for the $25 month. Success returns to Review with 250 credits. Further finished reviews bill at $0.15 until the monthly cap.
-- Account row: email, credits, Stripe customer id.
+- Stripe Checkout: card on file starts the one-month free trial on the chosen tier (Developer or Fleet). Set Stripe `trial_end` to the same day-of-month one month later, clamped (not `trial_period_days=30`). After the trial month, the tier price bills unless cancelled. Included reviews reset each period; overage bills at the tier rate until the user-set monthly cap (default $0). Cap is stored as integer cents.
+- Account row: email, credits (legacy), plan, monthly_cap_cents, billing_anchor_day, Stripe customer id.
 
 ### What the UI will not have in v1
 
@@ -97,10 +104,10 @@ A website submit and an API submit write the same `runs` row. `source` is `web`,
 POST /v1/reviews        body: { diff, files?, source? }
                         202 { run_id } after key, credit, and size checks
 GET  /v1/runs/:id       { status, findings, partial, omitted, cost_usd }
-GET  /v1/me             { credits }
+GET  /v1/me             { reviews_left }
 ```
 
-`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not spend a credit. The credit decrements only when status flips to `done`. That decrement is in the same transaction. It matches a user only when credits are greater than 0. If it changes no row, the run is `failed` and credits stay 0. A second GET of a done run returns the same findings and does not decrement again. If the process dies before that transaction, the run stays queued, and the restarted worker charges once.
+`status` is `queued`, `done`, or `failed`. Poll every 2 seconds. A run still queued after 3 minutes becomes `failed` and does not count toward the period. Accept reserves a period slot in the same transaction as the queued insert (cap check). Finish flips to `done` without touching `credits`. A second GET of a done run returns the same findings. If the process dies before finish, the run stays queued, and the restarted worker finishes once. `reviews_left` is included reviews still unused in the current period.
 
 When the body includes `files`, a done run sets `partial` true and `omitted` to the paths that were not selected. A done review of the full diff sets `partial` false and `omitted` to an empty list. A queued GET keeps `partial` false and `omitted` [] until the run is done.
 
@@ -186,21 +193,23 @@ Kill gate, before Stripe:
 - 85% or better: ship.
 - 70–85%: one more pass, then a human decides.
 
-Re-run this when the rubric or the model changes. If recall drops under 70%, stop selling.
+**Status (21 Oct 2026):** Kill gate (recall test) passed **locally**, run by Daryl. Not CI-verified. Re-run this when the rubric or the model changes. If recall drops under 70%, stop selling.
 
 ## Pipeline
 
-1. Benchmark subset and kill-gate number. Blocks Stripe.
+1. Benchmark subset and kill-gate number. Locally passed 21 Oct 2026 (Daryl); still blocks Stripe until CI-verified if you want that bar.
 2. Reviewer worker, async run row, size check, cache logging.
 3. Three screens against the same review function.
-4. Keys, Stripe month, Action snippet.
+4. API keys + Stripe card-on-file day-of-month trial on Developer and Fleet, Action snippet.
 5. Ten users. Five of ten run a second review unprompted: add the shared team balance. Else stop.
 
 ## Tables
 
-- `users(email, credits, stripe_customer_id)`
+- `users(email, credits, stripe_customer_id, plan, monthly_cap_cents, billing_anchor_day)` — `credits` is legacy; default `monthly_cap_cents` is 0; legacy `monthly_cap_usd` if present is migrated ×100 and kept
 - `api_keys(user_id, prefix, hash, name, last_used_at, revoked_at)`
 - `runs(user_id, diff_hash, findings_json, status, partial, cost_usd, cache_read, cache_write, source, created_at)`
+
+Included reviews and the overage cap are counted per billing period from `runs`: `queued` + `done` since period start. Failed runs never count. Period boundaries follow `billing_anchor_day` (card-on-file day, clamped). Accept checks the count and inserts the queued row in one transaction so concurrent accepts cannot overrun the cap.
 
 `cache_read` and `cache_write` are columns on `runs`. They stay null. `review_diff` does not return token counts, and a fixture run does not invent them. `omitted` lists paths left out when the request included `files`. A queued GET leaves it empty.
 

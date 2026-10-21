@@ -1,13 +1,14 @@
 (function () {
-  // Example data only. Nothing here calls the API.
-  var STORAGE = "reviewgrade.account.v2";
+  // Example / mock data only. Nothing here calls the API or Stripe.
+  var STORAGE = "reviewgrade.account.v5";
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var blank = {
     email: "ada@example.com",
-    plan: "month",            // "trial" | "month"
-    cap: 50,
+    plan: "developer", // mock: "developer" | "fleet"
+    cap: 0, // mock: default overage cap is $0 (Daryl, 21 Oct 2026)
     finished: 36,
     included: 250,
+    trial: true, // mock: first month free after card on file
     keys: [
       { name: "ci", prefix: "ra_live_7kQm3aP1", last: "2 Oct", revoked: false },
       { name: "agent", prefix: "ra_live_p2nR8cQw", last: "", revoked: false }
@@ -21,9 +22,28 @@
     { id: "run_01J9VKEXAMPLE", source: "api", status: "done", when: "10 Oct 14:31" },
     { id: "run_01J9TAEXAMPLE", source: "web", status: "done", when: "9 Oct 11:05" }
   ];
+  // Mock plans only — prices decided 21 Oct 2026. No 20-review trial.
   var PLANS = {
-    month: { included: 250, tag: "Month", line: "$25 for 250 reviews, $0.10 each. Then $0.15 a review.", bill: "Month plan, $25 for 250 reviews. Renews [renewal date]. Payment and invoices are handled by Stripe.", finished: 36 },
-    trial: { included: 20, tag: "Trial", line: "20 free reviews, once per email. No extra reviews on the trial.", bill: "Trial. 20 reviews, once per email. Upgrade to the Month for 250 reviews at $0.10 each.", finished: 6 }
+    developer: {
+      included: 250,
+      price: 25,
+      overage: 0.15,
+      tag: "Developer",
+      line: "$25/month for 250 reviews. Then $0.15 a review after you set a monthly spending cap. Mock data.",
+      bill: "Developer plan (mock), $25 for 250 reviews. Your first month is free when you add a card. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
+      finished: 36,
+      unit: "1 review · included"
+    },
+    fleet: {
+      included: 2500,
+      price: 199,
+      overage: 0.06,
+      tag: "Fleet",
+      line: "$199/month for 2,500 reviews. Then $0.06 a review after you set a monthly spending cap. Mock data.",
+      bill: "Fleet plan (mock), $199 for 2,500 reviews. Your first month is free when you add a card. Default overage cap $0. Renews [renewal date]. Payment and invoices are handled by Stripe.",
+      finished: 420,
+      unit: "1 review · included"
+    }
   };
 
   function clone(v) { return JSON.parse(JSON.stringify(v)); }
@@ -48,12 +68,22 @@
   var state = load();
   var reveal = "", newPrefix = "", counted = false;
 
+  function plan() { return PLANS[state.plan]; }
   function left() { return Math.max(0, state.included - state.finished); }
   function capLine() {
-    return state.plan === "trial" ? "The trial has no extra reviews. The cap applies once you are on the Month."
-      : "After 250 reviews, each one is $0.15 until the extra charge reaches $" + state.cap + ".";
+    var p = plan();
+    var rate = "$" + p.overage.toFixed(2);
+    return (
+      p.included +
+      " reviews are included each month. Extra reviews are off until you set a monthly spending cap. Then each extra review costs " +
+      rate +
+      ", up to your cap."
+    );
   }
-  function extra() { return Math.max(0, state.finished - 250) * 0.15; }
+  function extra() {
+    var p = plan();
+    return Math.max(0, state.finished - p.included) * p.overage;
+  }
 
   function countUp(el, to) {
     if (reduce || counted) { el.textContent = String(to); return; }
@@ -69,37 +99,37 @@
   function cell(text, cls) { var td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td; }
 
   function render() {
-    var plan = PLANS[state.plan];
+    var p = plan();
     $("#email").textContent = state.email;
     countUp($("#left"), left());
-    $("#plan-tag").textContent = plan.tag;
-    $("#plan-line").textContent = plan.line;
+    $("#plan-tag").textContent = p.tag + (state.trial ? " · trial" : "");
+    $("#plan-line").textContent = p.line;
     $("#used").textContent = state.finished;
     $("#included").textContent = state.included;
     $("#used-line").textContent = state.finished + " of " + state.included + " are finished. Unused reviews end with the month.";
-    requestAnimationFrame(function () { $("#used-bar").style.transform = "scaleX(" + (state.finished / state.included) + ")"; });
-    var base = state.plan === "month" ? 25 : 0;
+    requestAnimationFrame(function () { $("#used-bar").style.transform = "scaleX(" + Math.min(1, state.finished / state.included) + ")"; });
+    var base = state.trial ? 0 : p.price;
     $("#spend").textContent = money(base + extra());
-    $("#spend-line").textContent = state.plan === "month" ? money(base) + " for the month, plus " + money(extra()) + " over 250 (cap $" + state.cap + ")." : "Nothing spent. The trial is free.";
+    $("#spend-line").textContent = state.trial
+      ? "Trial month (mock): $0.00 base, plus " + money(extra()) + " over " + p.included + " (cap $" + state.cap + ")."
+      : money(base) + " for the month, plus " + money(extra()) + " over " + p.included + " (cap $" + state.cap + ").";
     var capInput = $("#cap");
     if (document.activeElement !== capInput) capInput.value = String(state.cap);
-    capInput.disabled = state.plan === "trial";
+    capInput.disabled = false;
     $("#cap-line").textContent = capLine();
-    $("#bill-line").textContent = plan.bill;
-    $("#upgrade").hidden = state.plan !== "trial";
-    $("#plan-toggle").textContent = state.plan === "trial" ? "Preview as Month" : "Preview as Trial";
+    $("#bill-line").textContent = p.bill;
+    $("#upgrade").hidden = state.plan !== "developer";
+    $("#plan-toggle").textContent = state.plan === "developer" ? "Preview as Fleet (mock)" : "Preview as Developer (mock)";
 
-    // Ledger
     var tb = $("#runs"); tb.replaceChildren();
     RUNS.forEach(function (r) {
       var tr = document.createElement("tr");
       var st = cell(r.status === "done" ? "done" : "failed", "st st--" + r.status);
-      var cost = r.status === "failed" ? "No charge" : (state.plan === "month" ? "1 credit · $0.10" : "1 trial credit");
+      var cost = r.status === "failed" ? "No charge" : p.unit;
       tr.append(cell(r.id, "mono"), cell(r.source, "mono dim"), st, cell(r.when, "dim"), cell(cost, "r mono" + (r.status === "failed" ? " dim" : "")));
       tb.append(tr);
     });
 
-    // Keys
     var list = $("#key-list"); list.replaceChildren();
     state.keys.forEach(function (key, index) {
       var tr = document.createElement("tr");
@@ -169,14 +199,14 @@
   $("#secret-hide").addEventListener("click", function () { reveal = ""; newPrefix = ""; render(); });
 
   $("#plan-toggle").addEventListener("click", function () {
-    state.plan = state.plan === "trial" ? "month" : "trial";
-    state.included = PLANS[state.plan].included; state.finished = PLANS[state.plan].finished;
+    state.plan = state.plan === "developer" ? "fleet" : "developer";
+    state.included = PLANS[state.plan].included;
+    state.finished = PLANS[state.plan].finished;
     counted = false; save(); render();
   });
   $("#sign-out").addEventListener("click", function () { $("#signout-note").hidden = false; });
   ["#upgrade", "#manage"].forEach(function (s) { $(s).addEventListener("click", function (e) { e.preventDefault(); }); });
 
-  // Staggered reveal
   var rv = document.querySelectorAll(".rv");
   if (reduce || !("IntersectionObserver" in window)) rv.forEach(function (el) { el.classList.add("in"); });
   else {

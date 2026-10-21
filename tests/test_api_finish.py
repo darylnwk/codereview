@@ -168,10 +168,10 @@ class ApiFinishTests(unittest.TestCase):
         )
         return completed.stdout[:-1]
 
-    def credits(self, server: FinishServer, key: str) -> int:
+    def reviews_left(self, server: FinishServer, key: str) -> int:
         status, body = server.exchange("GET", "/v1/me", key)
         self.assertEqual(status, 200)
-        return int(body["credits"])
+        return int(body["reviews_left"])
 
     def run_count(self) -> int:
         connection = sqlite3.connect(self.db)
@@ -215,7 +215,7 @@ class ApiFinishTests(unittest.TestCase):
         )
         self.assertEqual(status, 413)
         self.assertEqual(body, _TOO_EXPENSIVE)
-        self.assertEqual(self.credits(server, key), 5)
+        self.assertEqual(self.reviews_left(server, key), 250)
         self.assertEqual(self.run_count(), 0)
         accepted, accepted_body = server.exchange(
             "POST",
@@ -225,7 +225,7 @@ class ApiFinishTests(unittest.TestCase):
         )
         self.assertEqual(accepted, 202)
         self.assertEqual(list(accepted_body), ["run_id"])
-        self.assertEqual(self.credits(server, key), 5)
+        self.assertEqual(self.reviews_left(server, key), 249)
 
     def test_finding_fixture_charges_once_and_keeps_the_finding(self) -> None:
         server = self.open_server(worker=True, fixture="finding")
@@ -243,17 +243,17 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(got["omitted"], [])
         self.assertEqual(got["findings"], [_FINDING])
         self.assertEqual(got["cost_usd"], 0.0004)
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.reviews_left(server, key), 249)
         again_status, again = server.exchange("GET", "/v1/runs/" + body["run_id"], key)
         self.assertEqual(again_status, 200)
         self.assertEqual(again["findings"], got["findings"])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.reviews_left(server, key), 249)
         row = self.run_row(body["run_id"])
         self.assertIsNone(row["diff_text"])
         self.assertIsNone(row["cache_read"])
         self.assertIsNone(row["cache_write"])
 
-    def test_error_fixture_leaves_credits_at_the_seed(self) -> None:
+    def test_error_fixture_frees_period_slot(self) -> None:
         server = self.open_server(worker=True, fixture="error")
         key = self.seed(5)
         status, body = server.exchange(
@@ -266,7 +266,7 @@ class ApiFinishTests(unittest.TestCase):
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "failed")
         self.assertIsNone(got["findings"])
-        self.assertEqual(self.credits(server, key), 5)
+        self.assertEqual(self.reviews_left(server, key), 250)
         self.assertIsNone(self.run_row(body["run_id"])["diff_text"])
 
     def test_bad_fixture_fails_with_null_findings(self) -> None:
@@ -282,7 +282,7 @@ class ApiFinishTests(unittest.TestCase):
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "failed")
         self.assertIsNone(got["findings"])
-        self.assertEqual(self.credits(server, key), 5)
+        self.assertEqual(self.reviews_left(server, key), 250)
 
     def test_partial_review_lists_the_other_path(self) -> None:
         quiet = self.open_server(worker=False)
@@ -304,11 +304,11 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(got["status"], "done")
         self.assertEqual(got["partial"], True)
         self.assertEqual(got["omitted"], ["skip.py"])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.reviews_left(server, key), 249)
 
-    def test_one_credit_finishes_the_oldest_run_only(self) -> None:
+    def test_two_queued_runs_both_finish(self) -> None:
         quiet = self.open_server(worker=False)
-        key = self.seed(1)
+        key = self.seed(0)
         first_status, first = quiet.exchange(
             "POST",
             "/v1/reviews",
@@ -328,11 +328,10 @@ class ApiFinishTests(unittest.TestCase):
         oldest = self.wait_settled(server, key, first["run_id"])
         newer = self.wait_settled(server, key, second["run_id"])
         self.assertEqual(oldest["status"], "done")
-        self.assertEqual(newer["status"], "failed")
-        self.assertIsNone(newer["findings"])
-        self.assertEqual(self.credits(server, key), 0)
+        self.assertEqual(newer["status"], "done")
+        self.assertEqual(self.reviews_left(server, key), 248)
 
-    def test_stale_run_fails_and_keeps_credits(self) -> None:
+    def test_stale_run_fails_and_frees_period_slot(self) -> None:
         quiet = self.open_server(worker=False)
         key = self.seed(5)
         status, body = quiet.exchange(
@@ -357,7 +356,7 @@ class ApiFinishTests(unittest.TestCase):
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "failed")
         self.assertIsNone(got["findings"])
-        self.assertEqual(self.credits(server, key), 5)
+        self.assertEqual(self.reviews_left(server, key), 250)
 
     def test_second_worker_pass_charges_once(self) -> None:
         server = self.open_server(worker=True, fixture="finding")
@@ -371,10 +370,10 @@ class ApiFinishTests(unittest.TestCase):
         self.assertEqual(status, 202)
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "done")
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.reviews_left(server, key), 249)
         server.stop()
         restarted = self.open_server(worker=True, fixture="finding")
-        self.assertEqual(self.credits(restarted, key), 4)
+        self.assertEqual(self.reviews_left(restarted, key), 249)
         again_status, again = restarted.exchange("GET", "/v1/runs/" + body["run_id"], key)
         self.assertEqual(again_status, 200)
         self.assertEqual(again["findings"], got["findings"])
@@ -404,7 +403,7 @@ class ApiFinishTests(unittest.TestCase):
         got = self.wait_settled(server, key, body["run_id"])
         self.assertEqual(got["status"], "done")
         self.assertEqual(got["findings"], [_FINDING])
-        self.assertEqual(self.credits(server, key), 4)
+        self.assertEqual(self.reviews_left(server, key), 249)
         server.stop()
         restarted = self.open_server(worker=True, fixture="error")
-        self.assertEqual(self.credits(restarted, key), 4)
+        self.assertEqual(self.reviews_left(restarted, key), 249)
