@@ -636,6 +636,37 @@ class PlanStoreAndApiTests(unittest.TestCase):
         self.assertEqual(billing.billing_anchor_day, 21)
         self.assertEqual(billing.period_reviews, 1)
 
+    def test_me_reviews_left_resets_on_anchor_day(self) -> None:
+        """``/v1/me`` uses the clock + anchor; day-1 would wrongly zero out left."""
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        secret = store.seed_account(0)
+        auth = store.authenticate(secret)
+        assert auth is not None
+        store.set_billing(auth.user_id, billing_anchor_day=21)
+        # 249 before the anchor boundary + 1 after → only 1 counts on Oct 22.
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=249,
+            created_at=format_time(datetime(2026, 10, 15, 12, 0, tzinfo=UTC)),
+        )
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=1,
+            created_at=format_time(datetime(2026, 10, 22, 12, 0, tzinfo=UTC)),
+        )
+        http_api.clock = lambda: datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
+        self.addCleanup(lambda: setattr(http_api, "clock", None))
+        status, body = http_api.read_me(store, secret)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"reviews_left": 249})
+        # Mutant forcing anchor_day=1 would count all 250 → reviews_left 0.
+        self.assertNotEqual(body["reviews_left"], 0)
+
     def test_cap_reached_message_reset_date_uses_anchor(self) -> None:
         """Cap-set refusal names the next anchor boundary, not day 1."""
         store = Store(self.db)
@@ -683,6 +714,44 @@ class PlanStoreAndApiTests(unittest.TestCase):
             "You’ve reached your $0.15 monthly spending cap for extra reviews. "
             "Raise your cap to keep reviewing, or wait until 21 Oct 2026.",
         )
+
+    def test_zero_cap_message_on_anchor_path(self) -> None:
+        """Zero-cap ``cap_reached`` copy on the clock/anchor accept path."""
+        store = Store(self.db)
+        self.addCleanup(store.close)
+        secret = store.seed_account(0)
+        auth = store.authenticate(secret)
+        assert auth is not None
+        store.set_billing(
+            auth.user_id,
+            monthly_cap_cents=0,
+            billing_anchor_day=21,
+        )
+        when = format_time(datetime(2026, 10, 20, 12, 0, tzinfo=UTC))
+        _seed_period_runs(
+            store,
+            user_id=auth.user_id,
+            key_id=auth.id,
+            done=250,
+            created_at=when,
+        )
+        http_api.clock = lambda: datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+        self.addCleanup(lambda: setattr(http_api, "clock", None))
+        status, body = http_api.accept_review(
+            store,
+            secret,
+            None,
+            json.dumps({"diff": _added("extra.py", 1, "x")}).encode("utf-8"),
+        )
+        self.assertEqual(status, 402)
+        self.assertEqual(body["error"], "cap_reached")
+        self.assertEqual(
+            body["message"],
+            "You’ve used all 250 reviews in your plan this month. "
+            "To keep reviewing, set a monthly spending cap for extra reviews.",
+        )
+        self.assertNotIn("reset_date", body)
+        self.assertEqual(list(body), ["error", "message"])
 
     def test_queued_reserves_cap_slot(self) -> None:
         store = Store(self.db)

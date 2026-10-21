@@ -202,7 +202,7 @@ def read_me(store: Store, token: str | None) -> tuple[int, dict]:
         decision = decide(GetMeOp(key_ok=key is not None))
         if isinstance(decision, ShowMe):
             assert key is not None
-            billing = store.billing(key.user_id)
+            billing = store.billing(key.user_id, now=_wall_now())
             plan = get_plan(billing.plan)
             left = reviews_left_this_period(plan, billing.period_reviews)
             return decision.status, {"reviews_left": left}
